@@ -94,3 +94,5 @@ pip install jupyter matplotlib numpy
 1. [PyTorch 基础 01：张量 (Tensor)](docs/tutorials/01_tensor_basics.md) - 对应 `00_pytorch_basics/01_tensors.py`
 2. [PyTorch 基础 02：自动微分 (Autograd)](docs/tutorials/02_autograd_mechanics.md) - 对应 `00_pytorch_basics/02_autograd.py`
 3. [PyTorch 基础 03：使用 GPU 加速](docs/tutorials/03_gpu_acceleration.md) - 对应 `00_pytorch_basics/03_check_gpu.py`
+4. [Taichi vs PyTorch](docs/tutorials/concept_taichi_vs_pytorch.md) - 了解两者区别
+5. [OpenAI Triton](docs/tutorials/concept_triton_overview.md) - 了解 GPU 编程新宠
