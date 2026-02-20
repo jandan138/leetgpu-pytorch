@@ -1,0 +1,9 @@
+# GPU 版 PyTorch (CUDA 12.4)，兼容 NVIDIA 驱动 >= 525.x
+# 安装命令：pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+torch==2.6.0+cu124
+torchvision==0.21.0+cu124
+torchaudio==2.6.0+cu124
+
+numpy
+jupyter
+matplotlib
