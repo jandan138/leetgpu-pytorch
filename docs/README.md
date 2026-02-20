@@ -32,6 +32,24 @@
 
 ---
 
+## 🏛️ 进阶系列：GPU 内存层级四部曲 (Memory Hierarchy Deep Dive)
+把 GPU 内部的存储结构掰开揉碎了讲。
+
+1.  **[第一章：Global Memory (显存) —— 那个遥远而巨大的仓库](tutorials/pytorch_basics/memory_hierarchy_1_global_memory.md)**
+    *   **核心问题**：为什么读内存的姿势不对，速度会差 10 倍？
+    *   **关键词**：Coalesced Access (合并访问), Memory Bound.
+2.  **[第二章：L2 Cache —— 全局中转站](tutorials/pytorch_basics/memory_hierarchy_2_l2_cache.md)**
+    *   **核心问题**：如何利用缓存命中来加速读取？
+    *   **关键词**：Cache Line, Hit/Miss, Temporal Locality.
+3.  **[第三章：Shared Memory (SRAM) —— 革命性的车间料框](tutorials/pytorch_basics/memory_hierarchy_3_shared_memory.md)**
+    *   **核心问题**：为什么矩阵乘法必须用 Shared Memory？什么是 Bank Conflict？
+    *   **关键词**：Data Reuse (数据复用), Tiling (分块), Bank Conflict.
+4.  **[第四章：Registers (寄存器) —— 极速的私有领地](tutorials/pytorch_basics/memory_hierarchy_4_registers.md)**
+    *   **核心问题**：为什么变量定义太多会导致性能下降？
+    *   **关键词**：Register Pressure (寄存器压力), Occupancy, Spill.
+
+---
+
 ## 🚀 第二部分：GPU 编程生态全景 (GPU Ecosystem)
 适合对高性能计算感兴趣的进阶读者。这里我们将探讨除了 PyTorch 之外，还有哪些强大的工具（Taichi, Triton, Warp）以及它们之间的关系。
 
