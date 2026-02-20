@@ -14,6 +14,15 @@
 3.  **[PyTorch 基础 03：使用 GPU 加速](tutorials/pytorch_basics/03_gpu_acceleration.md)**
     *   如何检测 CUDA 环境并将计算移动到 GPU 上？
     *   对应代码：`00_pytorch_basics/03_check_gpu.py`
+4.  **[深度解析：GPU 内存架构与数据传输](tutorials/pytorch_basics/deep_dive_gpu_memory_architecture.md)**
+    *   **核心问题**：`to("cuda")` 到底发生了什么？为什么数据搬运这么慢？
+    *   **关键词**：Host/Device, PCIe, Global Memory, Shared Memory.
+5.  **[深度解析：CUDA 执行模型](tutorials/pytorch_basics/deep_dive_cuda_execution_model.md)**
+    *   **核心问题**：GPU 线程是如何组织的？为什么说 Warp 是调度的最小单位？
+    *   **关键词**：Grid, Block, Warp, SIMT, Branch Divergence.
+6.  **[实战分析：从 Python 到 CUDA 的性能飞跃](tutorials/pytorch_basics/case_study_vector_add.md)**
+    *   **核心问题**：手写 CUDA 到底比 Python 快在哪里？
+    *   **关键词**：向量加法, SIMD, Coalesced Access, Tiling.
 
 ---
 
