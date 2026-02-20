@@ -17,10 +17,16 @@
 4.  **[深度解析：GPU 内存架构与数据传输](tutorials/pytorch_basics/deep_dive_gpu_memory_architecture.md)**
     *   **核心问题**：`to("cuda")` 到底发生了什么？为什么数据搬运这么慢？
     *   **关键词**：Host/Device, PCIe, Global Memory, Shared Memory.
-5.  **[深度解析：CUDA 执行模型](tutorials/pytorch_basics/deep_dive_cuda_execution_model.md)**
+5.  **[为什么 GPU 需要“锁页内存” (Pinned Memory)](tutorials/pytorch_basics/deep_dive_pinned_memory.md)**
+    *   **核心问题**：为什么 `DataLoader` 要设 `pin_memory=True`？GPU 为什么不能读普通内存？
+    *   **关键词**：虚拟内存, 缺页中断, DMA, 物理地址.
+6.  **[DMA 与异步计算：释放 CPU 的潜能](tutorials/pytorch_basics/deep_dive_dma_and_async.md)**
+    *   **核心问题**：CPU 发完指令后去干嘛了？如何实现“计算”与“传输”的重叠？
+    *   **关键词**：DMA, 异步传输, CUDA Streams, Overlap.
+7.  **[深度解析：CUDA 执行模型](tutorials/pytorch_basics/deep_dive_cuda_execution_model.md)**
     *   **核心问题**：GPU 线程是如何组织的？为什么说 Warp 是调度的最小单位？
     *   **关键词**：Grid, Block, Warp, SIMT, Branch Divergence.
-6.  **[实战分析：从 Python 到 CUDA 的性能飞跃](tutorials/pytorch_basics/case_study_vector_add.md)**
+8.  **[实战分析：从 Python 到 CUDA 的性能飞跃](tutorials/pytorch_basics/case_study_vector_add.md)**
     *   **核心问题**：手写 CUDA 到底比 Python 快在哪里？
     *   **关键词**：向量加法, SIMD, Coalesced Access, Tiling.
 
