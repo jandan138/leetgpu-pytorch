@@ -1,7 +1,11 @@
 # Environments
 venv/
+.venv/
 env/
 .env
+
+# uv
+.python-version
 
 # Python
 __pycache__/

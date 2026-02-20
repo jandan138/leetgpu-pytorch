@@ -14,6 +14,8 @@
 
 ## 如何开始
 
+本项目使用 [uv](https://docs.astral.sh/uv/) 管理依赖和虚拟环境，相比传统 `pip + venv` 速度更快、配置更清晰。
+
 1. **克隆仓库**
 
    ```bash
@@ -21,29 +23,65 @@
    cd leetgpu-pytorch
    ```
 
-2. **创建虚拟环境 (推荐)**
+2. **安装 uv**
+
+   ```powershell
+   # Windows（PowerShell）
+   powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
+   ```
 
    ```bash
-   python -m venv venv
-   # Windows
-   .\venv\Scripts\activate
    # Linux/macOS
-   source venv/bin/activate
+   curl -LsSf https://astral.sh/uv/install.sh | sh
    ```
 
-3. **安装依赖**
+   > 也可通过 pip 安装：`pip install uv`
+
+3. **创建虚拟环境并安装依赖（一步完成）**
 
    ```bash
-   pip install -r requirements.txt
+   uv sync
    ```
 
-4. **运行代码**
+   > uv 会自动读取 `pyproject.toml`，创建 `.venv` 目录，并从 PyTorch 官方 CUDA 源拉取 GPU 版本。
+   > 首次运行需下载约 2.5GB，请确保网络畅通。
 
-   你可以直接运行 Python 脚本或启动 Jupyter Notebook 进行交互式学习。
+4. **激活虚拟环境**
+
+   ```powershell
+   # Windows
+   .\.venv\Scripts\activate
+   ```
 
    ```bash
+   # Linux/macOS
+   source .venv/bin/activate
+   ```
+
+5. **运行代码**
+
+   ```bash
+   # 验证 GPU 是否可用
+   python 00_pytorch_basics/03_check_gpu.py
+
+   # 启动 Jupyter Notebook 进行交互式学习
    jupyter notebook
    ```
+
+<details>
+<summary>不想用 uv？备用方案（传统 pip）</summary>
+
+```bash
+python -m venv venv
+# Windows: .\venv\Scripts\activate
+# Linux/macOS: source venv/bin/activate
+
+# GPU 版 PyTorch 需单独指定源
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+pip install jupyter matplotlib numpy
+```
+
+</details>
 
 ## 学习路线
 

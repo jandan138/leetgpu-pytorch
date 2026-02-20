@@ -1,9 +1,19 @@
+# ============================================================
+# 本项目已迁移到 uv 管理，推荐使用以下命令安装依赖：
+#
+#   uv sync
+#
+# 此文件作为不使用 uv 时的备用（pip）安装方案。
+# 依赖的权威来源为 pyproject.toml。
+# ============================================================
+
 # GPU 版 PyTorch (CUDA 12.4)，兼容 NVIDIA 驱动 >= 525.x
-# 安装命令：pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+# pip 安装命令（需手动指定源）：
+#   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
 torch==2.6.0+cu124
 torchvision==0.21.0+cu124
 torchaudio==2.6.0+cu124
 
-numpy
-jupyter
-matplotlib
+numpy>=1.24
+jupyter>=1.0
+matplotlib>=3.7

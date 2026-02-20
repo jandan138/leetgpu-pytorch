@@ -56,7 +56,18 @@ if torch.cuda.is_available():
    这是新手最常遇到的错误。它意味着你试图让一个 CPU 张量和一个 GPU 张量进行运算。解决方法是确保所有参与运算的张量都在同一个设备上（通常都 `.to(device)`）。
 
 2. **如何安装 GPU 版本的 PyTorch？**
-   请访问 [PyTorch 官网](https://pytorch.org/get-started/locally/)，根据你的操作系统和 CUDA 版本选择正确的安装命令。
+
+   **推荐（uv）**：项目已在 `pyproject.toml` 中配置好 PyTorch CUDA 源，直接运行：
+   ```bash
+   uv sync
+   ```
+
+   **备用（pip）**：需要手动指定安装源：
+   ```bash
+   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
+   ```
+
+   > 也可访问 [PyTorch 官网](https://pytorch.org/get-started/locally/) 根据你的 CUDA 版本选择对应命令。
 
 ## 总结
 现在你已经学会了：
