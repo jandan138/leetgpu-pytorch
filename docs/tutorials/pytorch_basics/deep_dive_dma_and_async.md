@@ -81,6 +81,47 @@ Compute Engine:            |--Calc A--|--Calc B--|
 ```
 **Copy B 和 Calc A 实现了重叠！** 这种技术叫 **"Hiding Latency" (掩盖延迟)**。
 
+### 3.3 深入底层：GPU 多流是怎么实现的？
+你可能会问：CPU 异步是因为有 DMA 控制器单独干活，那 GPU 凭什么能一边算一边搬？它内部也有多个“大脑”吗？
+
+**是的！GPU 内部有独立的硬件引擎和调度器。**
+
+#### 1. 独立的硬件引擎 (Independent Engines)
+GPU 芯片上不仅有成千上万个计算核心（CUDA Cores / SMs），还有专门负责搬运数据的电路：
+*   **Compute Engine (CE)**：负责执行 Kernel（矩阵乘法、卷积等）。
+*   **Copy Engine (DMA)**：专门负责 PCIe 数据传输。
+    *   现代高端 GPU（如 A100）通常有 **2 个 Copy Engines**：一个负责上传（Host -> Device），一个负责下载（Device -> Host）。这意味着它可以**同时**读和写！
+    *   即使是消费级 GPU（如 RTX 3090/4090），通常也至少有一个独立的 Copy Engine。
+
+#### 2. 硬件调度器 (Hardware Scheduler)
+在 GPU 的最前端，有一个非常聪明的硬件单元，通常被称为 **GigaThread Engine** 或 **Front-End Scheduler**。它的工作流程如下：
+
+1.  **指令队列**：CPU 通过驱动程序把指令塞进不同的 Stream 队列里。
+    *   Stream 1 队列：`[Copy A, Calc A]`
+    *   Stream 2 队列：`[Copy B, Calc B]`
+2.  **依赖分析**：调度器会检查指令之间的依赖关系。Stream 1 和 Stream 2 是独立的，互不干扰。
+3.  **分发指令**：
+    *   调度器看到 `Copy A`，发现 Copy Engine 空闲，发给 Copy Engine 执行。
+    *   当 `Copy A` 做完，开始做 `Calc A`（发给 Compute Engine）。
+    *   **关键点**：此时调度器看到 Stream 2 的 `Copy B` 已经在排队了。
+    *   它发现 **Copy Engine 闲着**（因为 `Calc A` 正在用 Compute Engine，没用 Copy Engine）。
+    *   于是，调度器立刻把 `Copy B` 发给 Copy Engine。
+
+**结果**：Compute Engine 在算 `Calc A`，Copy Engine 在搬 `Copy B`。两者互不干扰，完美并行！
+
+#### 通俗比喻：工厂流水线
+*   **CPU**：总指挥，负责下订单。
+*   **Stream**：订单列表。
+*   **Copy Engine**：**进货卡车**（专门负责运原料）。
+*   **Compute Engine**：**生产车间**（专门负责加工）。
+*   **Hardware Scheduler**：**工厂经理**。
+
+**单流情况**：
+经理死板地按顺序执行：卡车运货 -> 车间加工 -> 卡车运货 -> 车间加工。车间加工时，卡车司机在抽烟；卡车运货时，车间工人在聊天。
+
+**多流情况**：
+经理发现卡车闲着，马上让卡车去运下一批货（Stream 2），虽然现在的车间还在加工上一批货（Stream 1）。这样，卡车和车间都在满负荷运转！
+
 ---
 
 ## 4. 总结
