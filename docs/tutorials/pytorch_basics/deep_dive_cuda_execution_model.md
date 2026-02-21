@@ -38,7 +38,9 @@
 想象 SM 是一个设备齐全的车间：
 1.  **CUDA Cores (工人)**：真正干活的地方。包括 FP32 Core, INT32 Core, 和专门做矩阵乘法的 Tensor Core。
 2.  **Shared Memory / L1 Cache (料框)**：这就是我们之前提到的“极速缓存”。Block 内的所有线程都共享这块宝贵的 100KB 左右的内存。
-3.  **Register File (工具箱)**：每个 SM 有巨大的寄存器堆（比如 256KB）。这些寄存器被瓜分给正在运行的所有线程。
+3.  **Register File (工具箱堆)**：每个 SM 有巨大的 **寄存器堆 (Register File)**（比如 256KB）。
+    *   **分配机制**：这些寄存器会被**动态瓜分**给正在运行的所有线程。
+    *   **私有性**：虽然物理上大家都在一个大堆里，但分给你之后，就只有你能用，别的线程看不见。这就是所谓的“私有寄存器”。
 4.  **Warp Scheduler (工头)**：负责指挥 32 个线程（Warp）什么时候执行什么指令。
 
 ### 2.3 资源限制 (Occupancy)
@@ -89,7 +91,7 @@ if (threadIdx.x % 2 == 0) {
 
 | 软件概念 (Software) | 硬件对应 (Hardware) | 特性 |
 | :--- | :--- | :--- |
-| **Thread** | **CUDA Core (SP)** | 私有寄存器，极快 |
+| **Thread** | **CUDA Core (SP)** | **私有寄存器 (Register File)**。物理上在 SM 的大堆里，逻辑上归该线程独占，极快。 |
 | **Block** | **SM (Streaming Multiprocessor)** | 共享 Shared Memory，Block 间无法直接通信 |
 | **Grid** | **Device (GPU)** | 共享 Global Memory，延迟高 |
 | **Warp** | **调度单元 (Scheduler)** | 32 线程同进退，怕 `if-else` |
