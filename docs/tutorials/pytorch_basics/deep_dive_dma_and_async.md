@@ -109,6 +109,54 @@ GPU 芯片上不仅有成千上万个计算核心（CUDA Cores / SMs），还有
 
 **结果**：Compute Engine 在算 `Calc A`，Copy Engine 在搬 `Copy B`。两者互不干扰，完美并行！
 
+#### 3. 代码实例：如何使用 Stream？
+光说不练假把式，我们来看看在 PyTorch 中怎么写代码来实现上述的“多流并行”。
+
+```python
+import torch
+import time
+
+# 0. 准备数据 (Pinned Memory)
+N = 10000000
+# 必须使用 pin_memory=True，否则无法进行异步传输
+data_a = torch.randn(N, pin_memory=True)
+data_b = torch.randn(N, pin_memory=True)
+
+# 1. 创建两个 Stream (两条流水线)
+stream1 = torch.cuda.Stream()
+stream2 = torch.cuda.Stream()
+
+# 2. 预热 GPU (Warm-up)
+torch.zeros(1).cuda()
+
+start = time.time()
+
+# 3. 在 Stream 1 中处理 Batch A
+with torch.cuda.stream(stream1):
+    # 异步搬运：CPU 发指令后立刻走，Copy Engine 开始搬 A
+    input_a = data_a.to("cuda", non_blocking=True)
+    # 计算任务：Compute Engine 负责算 A
+    output_a = input_a * 2 
+
+# 4. 在 Stream 2 中处理 Batch B
+with torch.cuda.stream(stream2):
+    # 异步搬运：此时 Copy Engine 可能还在搬 A，也可能搬完了。
+    # 关键点：如果 Compute Engine 正在算 A，Copy Engine 闲着，它就会立刻开始搬 B！
+    input_b = data_b.to("cuda", non_blocking=True)
+    # 计算任务：等 B 搬完，且 Compute Engine 空闲时执行
+    output_b = input_b * 2
+
+# 5. 同步 (等待所有流完成)
+torch.cuda.synchronize()
+
+print(f"总耗时: {time.time() - start:.4f}秒")
+```
+
+**代码解析：**
+*   `torch.cuda.Stream()`：创建了独立的命令队列。
+*   `with torch.cuda.stream(s)`：在这个上下文里发出的所有 CUDA 命令（搬运、计算），都会进入流 `s` 的队列。
+*   **并行时刻**：当 `stream1` 在做乘法计算（占用 Compute Engine）时，`stream2` 的搬运命令（占用 Copy Engine）可以同时执行。
+
 #### 通俗比喻：工厂流水线
 *   **CPU**：总指挥，负责下订单。
 *   **Stream**：订单列表。
