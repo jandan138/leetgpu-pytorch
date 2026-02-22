@@ -156,17 +156,30 @@ def vector_add_kernel(
     offsets = block_start + tl.arange(0, BLOCK_SIZE)
     
     # 4. 边界检查 (Masking)：防止越界
-    # 如果 N = 1050，BLOCK_SIZE = 1024。
-    # 工人 0 负责 0~1023 (全都在 N 以内)，mask 全是 True。
-    # 工人 1 负责 1024~2047。但只有 1024~1049 是有效的。
-    # 1050~2047 都是越界的！读了会报错或读到垃圾数据。
-    # 所以我们需要一个 mask (掩码)，标记哪些索引是合法的。
+    # -----------------------------------------------------------
+    # 【场景模拟】
+    # 假设数组总长 N = 5，BLOCK_SIZE = 4。
+    # 我们需要 ceil(5/4) = 2 个工人。
+    #
+    # [工人 0] 负责 offsets = [0, 1, 2, 3]
+    # mask = [0<5, 1<5, 2<5, 3<5] = [True, True, True, True]
+    # -> 4 个数都合法，放心搬。
+    #
+    # [工人 1] 负责 offsets = [4, 5, 6, 7]
+    # mask = [4<5, 5<5, 6<5, 7<5] = [True, False, False, False]
+    # -> 只有第 1 个数 (index 4) 是合法的！
+    # -> 后面 3 个数 (index 5,6,7) 已经超出了数组 A 的范围。
+    # -----------------------------------------------------------
     mask = offsets < n_elements
     
     # 5. 搬运数据 (Load)：从显存读到寄存器
-    # load 指令：去 a_ptr + offsets 的地址抓数据。
-    # mask=mask：只抓合法的，越界的不要动（Triton 会自动补 0 或安全处理）。
-    # 此时 x 和 y 是位于 GPU 极速寄存器里的数据块。
+    # load 指令会检查 mask 中的每一个 bool 值：
+    # - 如果是 True：正常去显存地址 (a_ptr + offset) 读取数据。
+    # - 如果是 False：直接返回 0 (或其他默认值)，**绝对不会**去碰显存。
+    # 
+    # 结果 x (工人 1 的寄存器) 会变成：
+    # x = [A[4], 0.0, 0.0, 0.0]
+    # 这样就完美避免了 Segmentation Fault (非法内存访问)。
     x = tl.load(a_ptr + offsets, mask=mask)
     y = tl.load(b_ptr + offsets, mask=mask)
     
