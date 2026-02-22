@@ -211,9 +211,57 @@ C[i, j] = accum
 *   在 Compute 阶段，大家是为了**自己的计算任务**而工作，去 Shared Memory 里随意拿别人搬好的数据。
 *   这就是为什么说：**Load 阶段的线程索引** 和 **Compute 阶段的线程索引** 逻辑上是解耦的。
 
+### 2.5 常见疑问深入
+
+**Q1: 有没有可能我需要的元素是在别的 Block 被搬的？如何保证数据安全？**
+
+*   **绝对不可能跨 Block 访问 Shared Memory**：
+    *   Shared Memory 是**私有**于每个 Block 的。Block A 里的线程，**物理上**根本看不见 Block B 的 Shared Memory。
+    *   这就像**每个班级都有自己的黑板**。一班的学生只能看一班的黑板，不可能去二班的黑板上看题。
+*   **如何保证数据都在？**
+    *   **算法设计**：必须在设计算法时保证**闭环**。
+    *   在矩阵乘法中，计算 `C` 的一个小块 (32x32) 所需要的所有数据 (`A` 的对应行和 `B` 的对应列)，必须**完全由当前 Block 自己**负责搬运进来。
+    *   所以我们在 `for k` 循环里，每次都把当前需要的 `A` 和 `B` 的那一部分搬进**自己的** Shared Memory。自给自足，不求别人。
+
+**Q2: 这个代码里怎么显式地搬到 Shared Memory？**
+
+在伪代码中我们写的是 `s_a[...] = ...`，在真实编程中，写法略有不同：
+
+**CUDA C++ 写法**：
+你需要用 `__shared__` 关键字声明变量。
+```cpp
+__global__ void matmul_kernel(...) {
+    // 1. 声明 Shared Memory (静态分配)
+    // 这块内存住在 SM 内部，所有线程可见
+    __shared__ float s_a[32][32];
+    __shared__ float s_b[32][32];
+
+    // 2. 搬运 (从 Global 读，写入 Shared)
+    // 这里的 s_a 就是显式的 Shared Memory 变量
+    s_a[threadIdx.y][threadIdx.x] = A[...]; 
+    s_b[threadIdx.y][threadIdx.x] = B[...];
+
+    __syncthreads();
+    // ...
+}
+```
+
+**Triton Python 写法**：
+Triton 更高级，它没有显式的 `__shared__` 关键字，编译器会自动分析变量的生命周期。
+```python
+# Triton 编译器极其聪明
+# 当你把一个 load 进来的数据块用于点积计算时
+# Triton 会自动把 `a_tile` 和 `b_tile` 放在 Shared Memory 中
+a_tile = tl.load(a_ptr + ...) 
+b_tile = tl.load(b_ptr + ...)
+
+# 这里在这个 loop 里反复被使用
+accumulator += tl.dot(a_tile, b_tile)
+```
+
 ---
 
-### 2.4 效果对比：数学证明
+### 2.6 效果对比：数学证明
 
 *   **笨办法读取次数**：`2 * N^3`
 *   **Tiling 读取次数**：
