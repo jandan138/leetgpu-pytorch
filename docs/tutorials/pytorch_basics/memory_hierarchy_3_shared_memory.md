@@ -274,14 +274,56 @@ accumulator += tl.dot(a_tile, b_tile)
 
 ## 3. 潜在陷阱：Bank Conflict (存储体冲突)
 
-Shared Memory 虽然快，但它被分成了 32 个 **Bank (存储体)**（就像料框里有 32 个格子）。
+Shared Memory 虽然快，但它内部并不是“一块完整的大平地”，而是被切分成了 **32 个竖条**，这些竖条叫做 **Banks (存储体)**。
 
-*   **理想情况**：32 个线程（Warp）分别去访问 32 个不同的 Bank。大家互不干扰，速度全开。
-*   **冲突情况**：32 个线程同时去访问**同一个 Bank** 的不同地址。
-    *   比喻：32 个工人同时把手伸进同一个格子里拿东西。
-    *   后果：**串行化 (Serialization)**。大家得排队，速度慢 32 倍。
+*   **物理结构**：Bank 0, Bank 1, ..., Bank 31。
+*   **地址映射**：
+    *   地址 0 -> Bank 0
+    *   地址 4 (字节) -> Bank 1
+    *   ...
+    *   地址 124 -> Bank 31
+    *   地址 128 -> **回到 Bank 0** (循环)
 
-### Triton 代码示例
+### 3.1 什么是冲突？
+
+想象有 32 个取款窗口 (Banks)。
+
+*   **理想情况 (No Conflict)**：
+    *   32 个线程 (Warp) 同时去取钱。
+    *   Thread 0 去窗口 0，Thread 1 去窗口 1... Thread 31 去窗口 31。
+    *   **结果**：所有窗口同时服务，**1 个周期**全部办完。
+
+*   **冲突情况 (Conflict)**：
+    *   Thread 0 去窗口 0。
+    *   Thread 1 也去窗口 0 (比如它访问地址 128)。
+    *   **结果**：窗口 0 同一时间只能服务一个人。Thread 1 必须**排队**等 Thread 0 办完。
+    *   这就是 **串行化 (Serialization)**。如果 32 个线程都去同一个窗口，速度就会慢 **32 倍**！
+
+### 3.2 为什么会发生冲突？
+
+通常是因为你的**步长 (Stride)** 设置得不好。
+
+*   **步长 = 1 (连续访问)**：Thread `i` 访问 `i`。Bank `i % 32`。互不相同，**无冲突**。
+*   **步长 = 32 (按列访问)**：
+    *   Thread 0 访问 0 (Bank 0)。
+    *   Thread 1 访问 32 (Bank 0)。
+    *   Thread 2 访问 64 (Bank 0)。
+    *   **大灾难**：所有 32 个线程都撞到了 Bank 0！这就是最经典的 Bank Conflict。
+
+### 3.3 解决方案：Padding (填充)
+
+为了避免步长 32 的冲突，我们可以在每一行后面多加一个无用的空位 (Padding)。
+*   原来：每行 32 个数。
+*   现在：每行 **33** 个数。
+
+**效果**：
+*   Thread 0 访问 `[0, 0]` -> 地址 0 -> Bank 0。
+*   Thread 1 访问 `[1, 0]` -> 地址 33 -> **Bank 1** (33 % 32 = 1)。
+*   **完美错开**！大家又去了不同的窗口。
+
+### 3.4 Triton 代码示例
+
+Triton 的一大优势是它通常会自动处理这些复杂的 Bank Conflict 优化，让你可以专注于算法逻辑。
 
 ```python
 import triton
@@ -290,7 +332,9 @@ import triton.language as tl
 @triton.jit
 def tiled_matmul(a_ptr, b_ptr, c_ptr, ...):
     # 1. 在 Shared Memory 中分配空间
-    # Triton 会自动把这些变量放在 SRAM 里
+    # 当你写 tl.load 时，Triton 编译器会在幕后分析：
+    # "哦，这个 Block 需要反复读这块数据，我把它放到 Shared Memory 里吧"
+    # "并且，我会自动安排好数据的布局（比如加 Padding），防止 Bank Conflict"
     a_tile = tl.load(a_ptr + offsets...)
     b_tile = tl.load(b_ptr + offsets...)
     
@@ -298,8 +342,6 @@ def tiled_matmul(a_ptr, b_ptr, c_ptr, ...):
     # 这里的 a_tile 和 b_tile 就在 Shared Memory 里
     # 线程们疯狂地反复读取它们，完全不消耗显存带宽
     accumulator += tl.dot(a_tile, b_tile)
-    
-    # ...
 ```
 
 ## 4. 优化建议
