@@ -255,30 +255,60 @@ import triton.language as tl
 
 @triton.jit
 def matmul_kernel(
+    # 指针参数：指向 Global Memory 中的大矩阵
     a_ptr, b_ptr, c_ptr,
+    # 矩阵维度
     M, N, K,
+    # 步长 (Stride)：告诉 Triton 如何在内存中跳转
+    # 比如 stride_am=1 表示 A 在 M 维度上是连续的
     stride_am, stride_ak,
     stride_bk, stride_bn,
     stride_cm, stride_cn,
+    # 元编程参数 (Meta-parameters)：编译时确定的常量
+    # 这些参数决定了分块的大小，必须是 2 的幂次
     BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr,
 ):
-    # 1. 确定当前 Block 的位置
+    # 1. 确定当前 Block 的位置 (Program ID)
+    # 就像每个班级有班号，每个 Block 也有自己的 ID
+    # pid 决定了当前 Block 负责计算 C 矩阵的哪一块 (32x32)
     pid = tl.program_id(axis=0)
     
+    # 1.1 计算当前 Block 在 M (行) 和 N (列) 方向上的网格坐标
+    # 假设 Grid 是二维的，我们需要把 1D 的 pid 拆分成 2D 坐标
+    num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
+    num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
+    pid_m = pid // num_pid_n
+    pid_n = pid % num_pid_n
+
     # 2. 生成指针偏移量 (Load 阶段的准备)
+    # -----------------------------------------------------------
     # 就像我们之前说的，Thread 0-31 准备好去搬运第一块连续数据
     # 这里生成的是初始的指针位置
+    
+    # offs_am: 生成 [0, 1, ..., BLOCK_SIZE_M-1] 的序列
+    # 加上 pid_m * BLOCK_SIZE_M 后，就是当前 Block 负责的 M 维度范围
+    # % M 是为了防止越界 (虽然通常矩阵大小是 Block 的倍数)
     offs_am = (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M
+    
+    # offs_bn: 同理，生成 N 维度的偏移量
     offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N
+    
+    # offs_k: K 维度的偏移量 (从 0 开始，每次由循环推进)
     offs_k = tl.arange(0, BLOCK_SIZE_K)
     
+    # 计算 A 和 B 在 Global Memory 中的真实物理指针
+    # 指针 = 基地址 + (行索引 * 行步长) + (列索引 * 列步长)
+    # None 是为了进行广播 (Broadcasting)，生成 2D 网格指针
     a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
     b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
 
     # 3. 初始化累加器 (Compute 阶段的寄存器)
+    # 在寄存器中申请一块全 0 的空间，用于存放 C 的部分和
+    # 形状是 [BLOCK_SIZE_M, BLOCK_SIZE_N]
     accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
 
     # 4. 主循环：按块搬运 + 计算 (Tiling)
+    # K 维度也被切成了很多块，我们要一块一块地遍历
     for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
         
         # --- 自动 Shared Memory 管理 ---
@@ -286,21 +316,29 @@ def matmul_kernel(
         # 1. 生成从 Global Memory 读取数据的指令 (Coalesced Access)
         # 2. 在 SM 内部自动分配 Shared Memory 空间
         # 3. 把数据存入 Shared Memory (可能会自动处理 Padding 以避免 Bank Conflict)
+        # 4. 这里的 a_ptrs 和 b_ptrs 是指向当前 K 块的指针
         a_tile = tl.load(a_ptrs)
         b_tile = tl.load(b_ptrs)
 
         # --- 计算 ---
         # tl.dot 会生成 Tensor Core 指令或者高效率的 FMA 指令
         # 它的输入数据 (a_tile, b_tile) 实际上是来自 Shared Memory
+        # 计算结果累加到寄存器 accumulator 中
         accumulator += tl.dot(a_tile, b_tile)
 
         # --- 指针推进 ---
         # 准备搬运下一块
+        # A 指针向右移动 BLOCK_SIZE_K 步
+        # B 指针向下移动 BLOCK_SIZE_K 步
         a_ptrs += BLOCK_SIZE_K * stride_ak
         b_ptrs += BLOCK_SIZE_K * stride_bk
 
     # 5. 写回结果
+    # 所有的 K 都算完了，accumulator 里存的就是最终的 C[i, j]
+    # 重新计算 C 的写入位置指针
     c_ptrs = c_ptr + stride_cm * offs_am[:, None] + stride_cn * offs_bn[None, :]
+    
+    # 还可以加上 mask=... 来处理边界情况
     tl.store(c_ptrs, accumulator)
 ```
 
