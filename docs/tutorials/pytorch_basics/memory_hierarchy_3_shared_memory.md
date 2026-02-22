@@ -246,18 +246,68 @@ __global__ void matmul_kernel(...) {
 }
 ```
 
-**Triton Python 写法**：
-Triton 更高级，它没有显式的 `__shared__` 关键字，编译器会自动分析变量的生命周期。
-```python
-# Triton 编译器极其聪明
-# 当你把一个 load 进来的数据块用于点积计算时
-# Triton 会自动把 `a_tile` 和 `b_tile` 放在 Shared Memory 中
-a_tile = tl.load(a_ptr + ...) 
-b_tile = tl.load(b_ptr + ...)
+**Triton Python 写法 (完整矩阵乘法)**：
+Triton 的强大之处在于它把复杂的 Shared Memory 管理（声明、搬运、同步、防 Bank Conflict）都封装在了简洁的 `tl.load` 和 `tl.dot` 背后。
 
-# 这里在这个 loop 里反复被使用
-accumulator += tl.dot(a_tile, b_tile)
+```python
+import triton
+import triton.language as tl
+
+@triton.jit
+def matmul_kernel(
+    a_ptr, b_ptr, c_ptr,
+    M, N, K,
+    stride_am, stride_ak,
+    stride_bk, stride_bn,
+    stride_cm, stride_cn,
+    BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr,
+):
+    # 1. 确定当前 Block 的位置
+    pid = tl.program_id(axis=0)
+    
+    # 2. 生成指针偏移量 (Load 阶段的准备)
+    # 就像我们之前说的，Thread 0-31 准备好去搬运第一块连续数据
+    # 这里生成的是初始的指针位置
+    offs_am = (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M
+    offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N
+    offs_k = tl.arange(0, BLOCK_SIZE_K)
+    
+    a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
+    b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
+
+    # 3. 初始化累加器 (Compute 阶段的寄存器)
+    accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
+
+    # 4. 主循环：按块搬运 + 计算 (Tiling)
+    for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
+        
+        # --- 自动 Shared Memory 管理 ---
+        # 当你调用 tl.load 时，Triton 编译器会：
+        # 1. 生成从 Global Memory 读取数据的指令 (Coalesced Access)
+        # 2. 在 SM 内部自动分配 Shared Memory 空间
+        # 3. 把数据存入 Shared Memory (可能会自动处理 Padding 以避免 Bank Conflict)
+        a_tile = tl.load(a_ptrs)
+        b_tile = tl.load(b_ptrs)
+
+        # --- 计算 ---
+        # tl.dot 会生成 Tensor Core 指令或者高效率的 FMA 指令
+        # 它的输入数据 (a_tile, b_tile) 实际上是来自 Shared Memory
+        accumulator += tl.dot(a_tile, b_tile)
+
+        # --- 指针推进 ---
+        # 准备搬运下一块
+        a_ptrs += BLOCK_SIZE_K * stride_ak
+        b_ptrs += BLOCK_SIZE_K * stride_bk
+
+    # 5. 写回结果
+    c_ptrs = c_ptr + stride_cm * offs_am[:, None] + stride_cn * offs_bn[None, :]
+    tl.store(c_ptrs, accumulator)
 ```
+
+**深度解读 Triton 的魔法：**
+1.  **隐式声明**：你找不到 `__shared__` 关键字。`a_tile` 在逻辑上是一个张量，Triton 编译器负责决定把它放在哪里（通常是 Shared Memory，如果是 FP16 甚至可能直接在寄存器）。
+2.  **自动同步**：你找不到 `__syncthreads()`。Triton 编译器会分析数据依赖，自动在 `load` 和 `dot` 之间插入必要的同步指令。
+3.  **自动流水线 (Pipeline)**：更厉害的是，Triton 还能自动把 `load` 和 `dot` 并行起来（Async Copy），你完全不需要手写复杂的流水线代码。
 
 ---
 
