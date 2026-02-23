@@ -1,4 +1,4 @@
-# 02. Matrix Multiplication (矩阵乘法)
+# 02. Matrix Multiplication (矩阵乘法) - Naive Version
 
 ## 题目描述
 
@@ -10,97 +10,106 @@
 *   `solve` 函数签名必须保持不变。
 *   最终结果必须存储在矩阵 `C` 中。
 
-### 示例 1
-
-```
-Input:
-Matrix A (2 x 2):
-[[1.0, 2.0],
- [3.0, 4.0]]
-
-Matrix B (2 x 2):
-[[5.0, 6.0],
- [7.0, 8.0]]
-
-Output:
-Matrix C (2 x 2):
-[[19.0, 22.0],
- [43.0, 50.0]]
-```
-
-### 约束条件
-
-*   $1 \le M, N, K \le 8192$
-*   性能测试时 $M=8192, N=6144, K=4096$
-
 ## 解题思路
 
-### 方法 1：PyTorch 原生实现 (High-Level 深度解析)
+### 方法 1：PyTorch 原生实现 (High-Level)
 
-在 PyTorch 中，矩阵乘法有多种写法，但效率和原理大不相同。我们以 $C = A \times B$ 为例，假设 $A, B, C$ 都在 GPU 上。
+参考 [README_PYTORCH.md](README_PYTORCH.md)（这里简略带过，重点讲 Triton）。
+推荐写法：`torch.mm(A, B, out=C)`。
 
-#### 1. 常见写法对比
+### 方法 2：Triton Naive 实现 (Low-Level 入门)
 
-*   **写法 A (不推荐)：`C = torch.matmul(A, B)` 或 `C = A @ B`**
-    *   **动作**：PyTorch 会在后台悄悄申请一块**新显存**（临时 Tensor），把计算结果存进去。
-    *   **后果**：然后把变量名 `C` 的标签贴到这块新显存上。原来的 `C` 所指向的显存空间（如果外面有人引用）就被抛弃了，而且也没有被利用起来。
-    *   **比喻**：你要把水倒进桶里。这种写法是**“买个新桶装水，然后把旧桶扔了”**。
+这是一个**教学级**的实现，不包含任何复杂的性能优化（如分块、Shared Memory），旨在帮你理解 Triton 的基本语法和 Grid 映射逻辑。
 
-*   **写法 B (推荐)：`C.copy_(A @ B)`**
-    *   **动作**：先申请一块新显存存 `A @ B` 的结果，然后把结果**搬运（Copy）** 到 `C` 的显存里。
-    *   **优点**：符合 Python 直觉，确实修改了 `C` 的内容。
-    *   **缺点**：中间产生了一个临时 Tensor，多了一次显存分配和一次数据搬运。
-    *   **比喻**：**“买个新盆接水，再倒进旧桶里”**。
+#### 1. 核心心法：每人算一个格子
 
-*   **写法 C (最强)：`torch.mm(A, B, out=C)`**
-    *   **动作**：直接调用底层的 cuBLAS 库，告诉它：“结果直接写到 `C` 的地址里去！”
-    *   **优点**：**零显存开销 (Zero Memory Overhead)**。速度最快，显存占用最小。
-    *   **比喻**：**“直接拿旧桶接水”**。
+想象我们要计算 $C = A \times B$，其中 $C$ 的大小是 $M \times K$。
+*   **Grid 设定**：我们启动 $M \times K$ 个 Triton Program（线程）。
+*   **分工**：
+    *   线程 $(0, 0)$ 负责计算 $C[0, 0]$
+    *   线程 $(m, k)$ 负责计算 $C[m, k]$
+    *   ...
+*   **计算逻辑**：每个线程独立完成一个**点积 (Dot Product)** 运算。
+    *   它需要去矩阵 $A$ 里取第 $m$ 行。
+    *   去矩阵 $B$ 里取第 $k$ 列。
+    *   把这两排数字对应相乘并累加。
 
-#### 2. 代码实现
+#### 2. 关键概念：步长 (Stride)
+
+在 GPU 显存（以及 C/C++ 内存）中，数据是**一维线性存储**的。并没有真正的“二维矩阵”。
+为了用一维数组表示二维矩阵，我们引入了 **Stride (步长)** 的概念。
+
+*   **问题**：如何找到矩阵 $A[m, n]$ 在内存中的绝对地址？
+*   **公式**：`Address = Base_Ptr + m * Stride_Row + n * Stride_Col`
+*   **图解**：
+    假设 $A$ 是 $2 \times 3$ 的矩阵，行优先存储。
+    ```text
+    内存索引:  0      1      2      3      4      5
+    数值:     A[0,0] A[0,1] A[0,2] A[1,0] A[1,1] A[1,2]
+    ```
+    *   要从 $A[0,0]$ 跳到下一行 $A[1,0]$，需要跳过 3 个元素。所以 `stride_am = 3`。
+    *   要从 $A[0,0]$ 跳到下一列 $A[0,1]$，需要跳过 1 个元素。所以 `stride_an = 1`。
+
+#### 3. 代码逐行详解
 
 ```python
-def solve(A, B, C, M, N, K):
-    # 方式 1：In-place Copy (语义清晰)
-    # C.copy_(torch.mm(A, B))
+@triton.jit
+def matrix_multiplication_kernel(
+    a_ptr, b_ptr, c_ptr,
+    M, N, K,
+    stride_am, stride_an,  # A 的步长
+    stride_bk, stride_bn,  # B 的步长
+    stride_cm, stride_ck   # C 的步长
+):
+    # 1. 身份确认：我是负责哪个格子的工人？
+    # 我们启动的 grid 是 (M, K)
+    # axis=0 是第一维 (M)，axis=1 是第二维 (K)
+    pid_m = tl.program_id(axis=0)  # 我负责第 pid_m 行
+    pid_k = tl.program_id(axis=1)  # 我负责第 pid_k 列
     
-    # 方式 2：Direct Output (极致性能)
-    # 注意：torch.mm 只能做 2D 矩阵乘法，而 torch.matmul 可以做高维。
-    # 在本题中（都是 2D），torch.mm 是最纯粹的选择。
-    torch.mm(A, B, out=C)
+    # 2. 准备累加器
+    # C[pid_m, pid_k] 的值初始为 0
+    accumulator = 0.0
+    
+    # 3. 循环计算点积
+    # C[m, k] = Sum( A[m, n] * B[n, k] ) for n in 0..N
+    for n in range(0, N):
+        # --- 定位 A[pid_m, n] ---
+        # 也就是：A 的第 pid_m 行，第 n 列
+        offs_a = a_ptr + (pid_m * stride_am + n * stride_an)
+        
+        # --- 定位 B[n, pid_k] ---
+        # 也就是：B 的第 n 行，第 pid_k 列
+        offs_b = b_ptr + (n * stride_bn + pid_k * stride_bk)
+        
+        # --- 读取并累加 ---
+        # tl.load 从 Global Memory 读数据到寄存器
+        val_a = tl.load(offs_a)
+        val_b = tl.load(offs_b)
+        accumulator += val_a * val_b
+        
+    # 4. 写回结果
+    # 算出最终结果后，写回 C[pid_m, pid_k]
+    offs_c = c_ptr + (pid_m * stride_cm + pid_k * stride_ck)
+    tl.store(offs_c, accumulator)
 ```
 
----
+#### 4. 性能分析 (为什么这个版本慢？)
 
-### ❓ 附录：什么是 `__pycache__` 文件夹？
+虽然这个版本逻辑简单，但它犯了 GPU 编程的大忌：**重复读取 Global Memory**。
 
-你在目录下可能会看到一个叫 `__pycache__` 的文件夹，它是 Python 的**加速缓存**。
+*   **算一下**：
+    *   计算 $C[0, 0]$ 需要读 $A$ 的第 0 行。
+    *   计算 $C[0, 1]$ **也需要读** $A$ 的第 0 行。
+    *   ...
+    *   计算 $C[0, K-1]$ **全都要读** $A$ 的第 0 行。
+*   **后果**：$A$ 的第 0 行被从显存里重复读取了 $K$ 次！
+*   **改进方向**：这就是为什么我们需要 **Tiling (分块)** 和 **Shared Memory**。我们可以把 $A$ 的第 0 行读一次放到“公共桌子”（Shared Memory）上，让大家一起用，从而减少几百倍的显存读取。这将在进阶版本中介绍。
 
-*   **它是什么？**
-    当你运行 `import solution_pytorch` 时，Python 解释器不仅会读取源代码，还会把它编译成一种中间格式叫 **Bytecode (字节码)**。这些字节码文件通常以 `.pyc` 结尾。
-    
-*   **有什么用？**
-    **为了下次启动更快！**
-    下次你再运行程序时，Python 会检查：
-    1.  `solution_pytorch.py` 改动过吗？
-    2.  如果没有，直接加载 `__pycache__` 里的 `.pyc` 文件（跳过编译步骤）。
-    3.  如果改过，重新编译并更新缓存。
+## 运行与测试
 
-*   **需要管它吗？**
-    **完全不需要！** 它是自动生成的。你可以在 `.gitignore` 里忽略它，或者随时删掉它（Python 会自动重建）。千万不要手动去修改里面的文件。
+可以直接运行 `tests.py` 进行验证。由于这是朴素版本，对于大矩阵（如 4096 x 4096），它会比 PyTorch 慢很多，这是符合预期的。
 
-### 方法 2：Triton Kernel 实现
-
-这是 GPU 编程的经典案例。我们需要利用 **Shared Memory (SRAM)** 来减少对 Global Memory 的访问。
-
-**核心思想 (Tiling / 分块)**：
-1.  将矩阵 $C$ 划分为 $BLOCK\_SIZE\_M \times BLOCK\_SIZE\_N$ 的小块。
-2.  每个 Triton Program 负责计算 $C$ 的一个小块。
-3.  在计算过程中，沿着 $K$ 维度进行迭代（每次步进 $BLOCK\_SIZE\_K$）。
-4.  在每一步迭代中：
-    *   将 $A$ 的一小块 ($BLOCK\_SIZE\_M \times BLOCK\_SIZE\_K$) 加载到 SRAM。
-    *   将 $B$ 的一小块 ($BLOCK\_SIZE\_K \times BLOCK\_SIZE\_N$) 加载到 SRAM。
-    *   计算这两个小块的乘积，并累加到寄存器（Accumulator）中。
-5.  循环结束后，将累加器的结果写回矩阵 $C$。
-
-这种方法通过在 SRAM 中复用数据，极大地降低了显存带宽压力。
+```bash
+python tests.py
+```

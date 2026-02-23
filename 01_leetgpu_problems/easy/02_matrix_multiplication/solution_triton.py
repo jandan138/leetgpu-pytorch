@@ -2,105 +2,93 @@ import torch
 import triton
 import triton.language as tl
 
+# -----------------------------------------------------------------------------
+# Triton Naive Matrix Multiplication (朴素矩阵乘法)
+# -----------------------------------------------------------------------------
+# 这个版本是教学用的“最简”实现，没有使用分块 (Tiling) 和 Shared Memory。
+# 它的性能远不如 cuBLAS，但逻辑最直观。
+#
+# 核心思想：
+# 启动 M * K 个 Triton Program。
+# 每个 Program 负责计算 C[m, k] 这一个元素的值。
+# 计算公式：C[m, k] = sum(A[m, n] * B[n, k] for n in 0..N)
+# -----------------------------------------------------------------------------
+
 @triton.jit
-def matmul_kernel(
-    # Pointers to matrices
+def matrix_multiplication_kernel(
+    # 1. 矩阵指针 (Pointers)
     a_ptr, b_ptr, c_ptr,
-    # Matrix dimensions
+    # 2. 矩阵维度 (Dimensions)
     M, N, K,
-    # The stride variables represent how much to increase the ptr by when moving by 1
-    # element in a particular dimension. E.g. `stride_am` is how much to increase `a_ptr`
-    # by to get the element one row down (A has M rows).
-    stride_am, stride_ak,
+    # 3. 步长 (Strides)
+    # 告诉程序：在内存中，如果要移动一行或者一列，需要跳过多少个元素。
+    # stride_am: A 的行步长 (通常等于 N)
+    # stride_an: A 的列步长 (通常等于 1)
+    stride_am, stride_an,
     stride_bk, stride_bn,
-    stride_cm, stride_cn,
-    # Meta-parameters
-    BLOCK_SIZE_M: tl.constexpr, BLOCK_SIZE_N: tl.constexpr, BLOCK_SIZE_K: tl.constexpr,
+    stride_cm, stride_ck
 ):
-    """
-    Kernel for computing the matmul C = A x B.
-    A has shape (M, K), B has shape (K, N) and C has shape (M, N)
-    """
-    # -----------------------------------------------------------
-    # Map program ids `pid` to the block of C it should compute.
-    # This is done in a grouped ordering to promote L2 data reuse.
-    # See above `L2 Cache Optimizations` section.
-    pid = tl.program_id(axis=0)
-    num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)
-    num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)
-    num_pid_in_group = 8
-    group_id = pid // num_pid_in_group
-    first_pid_m = group_id * num_pid_in_group
-    group_size_m = min(num_pid_m - first_pid_m, num_pid_in_group)
-    pid_m = first_pid_m + (pid % group_size_m)
-    pid_n = (pid // group_size_m) % num_pid_n
-
-    # ----------------------------------------------------------
-    # Create pointers for the first blocks of A and B.
-    # We will advance this pointer as we move in the K direction
-    # and accumulate
-    # `a_ptrs` is a block of [BLOCK_SIZE_M, BLOCK_SIZE_K] pointers
-    # `b_ptrs` is a block of [BLOCK_SIZE_K, BLOCK_SIZE_N] pointers
-    # See above `Pointer Arithmetic` section for details
-    offs_am = (pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)) % M
-    offs_bn = (pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)) % N
-    offs_k = tl.arange(0, BLOCK_SIZE_K)
-    a_ptrs = a_ptr + (offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak)
-    b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
-
-    # -----------------------------------------------------------
-    # Iterate to compute a block of the C matrix.
-    # We accumulate into a `[BLOCK_SIZE_M, BLOCK_SIZE_N]` block
-    # of fp32 values for higher accuracy.
-    # `accumulator` will be converted back to fp16 after the loop.
-    accumulator = tl.zeros((BLOCK_SIZE_M, BLOCK_SIZE_N), dtype=tl.float32)
-    for k in range(0, tl.cdiv(K, BLOCK_SIZE_K)):
-        # Load the next block of A and B, generate a mask by checking the K dimension.
-        # If it is out of bounds, set it to 0.
-        a = tl.load(a_ptrs, mask=offs_k[None, :] < K - k * BLOCK_SIZE_K, other=0.0)
-        b = tl.load(b_ptrs, mask=offs_k[:, None] < K - k * BLOCK_SIZE_K, other=0.0)
-        # We accumulate along the K dimension.
-        accumulator += tl.dot(a, b)
-        # Advance the ptrs to the next K block.
-        a_ptrs += BLOCK_SIZE_K * stride_ak
-        b_ptrs += BLOCK_SIZE_K * stride_bk
+    # --- 1. 确定当前线程负责的坐标 (m, k) ---
+    # 我们启动的 Grid 是 (M, K)
+    # axis=0 对应 M 维度，axis=1 对应 K 维度
+    pid_m = tl.program_id(axis=0)
+    pid_k = tl.program_id(axis=1)
     
-    # -----------------------------------------------------------
-    # Write back the block of the output matrix C with masks.
-    offs_cm = pid_m * BLOCK_SIZE_M + tl.arange(0, BLOCK_SIZE_M)
-    offs_cn = pid_n * BLOCK_SIZE_N + tl.arange(0, BLOCK_SIZE_N)
-    c_ptrs = c_ptr + stride_cm * offs_cm[:, None] + stride_cn * offs_cn[None, :]
-    c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)
-    tl.store(c_ptrs, accumulator, mask=c_mask)
+    # --- 2. 初始化累加器 ---
+    # 我们要计算 C[pid_m, pid_k]，它是一个标量 (Scalar)。
+    # 用一个 32 位浮点数寄存器来存它。
+    accumulator = 0.0
+    
+    # --- 3. 计算点积 (Dot Product) ---
+    # C[m, k] = A 的第 m 行 与 B 的第 k 列 的点积
+    # 也就是遍历 n 从 0 到 N-1
+    for n in range(0, N):
+        # 3.1 定位 A[pid_m, n] 在内存中的地址
+        # 指针 = 基地址 + (行索引 * 行步长) + (列索引 * 列步长)
+        offs_a = a_ptr + (pid_m * stride_am + n * stride_an)
+        
+        # 3.2 定位 B[n, pid_k] 在内存中的地址
+        # 注意：这里 B 的行索引是 n，列索引是 pid_k
+        offs_b = b_ptr + (n * stride_bn + pid_k * stride_bk)
+        
+        # 3.3 读取数据 (Load)
+        # 从 Global Memory 读一个数到寄存器
+        val_a = tl.load(offs_a)
+        val_b = tl.load(offs_b)
+        
+        # 3.4 累加 (Accumulate)
+        accumulator += val_a * val_b
+        
+    # --- 4. 写回结果 (Store) ---
+    # 算完了，把 accumulator 里的值写回 C[pid_m, pid_k]
+    offs_c = c_ptr + (pid_m * stride_cm + pid_k * stride_ck)
+    tl.store(offs_c, accumulator)
 
 
-def solve(A: torch.Tensor, B: torch.Tensor, C: torch.Tensor, M: int, N: int, K: int):
-    """
-    Matrix Multiplication using Triton.
-    The result is stored in C.
-    """
-    # Check constraints
-    assert A.shape[0] == M and A.shape[1] == N, f"A shape {A.shape} mismatch with M={M}, N={N}"
-    assert B.shape[0] == N and B.shape[1] == K, f"B shape {B.shape} mismatch with N={N}, K={K}"
-    assert C.shape[0] == M and C.shape[1] == K, f"C shape {C.shape} mismatch with M={M}, K={K}"
+# a, b, c are tensors on the GPU 
+def solve(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor, M: int, N: int, K: int):
+    # 1. 准备步长参数 (Strides)
+    # Tensor.stride() 返回的是 (行步长, 列步长)
+    # 例如：对于一个 (2, 3) 的矩阵，如果它是行优先存储的：
+    # stride(0) = 3 (下一行要跳 3 个数)
+    # stride(1) = 1 (下一列要跳 1 个数)
+    stride_am, stride_an = a.stride(0), a.stride(1)
+    stride_bk, stride_bn = b.stride(0), b.stride(1)
+    stride_cm, stride_ck = c.stride(0), c.stride(1)
     
-    # 1. Define the grid.
-    BLOCK_SIZE_M = 128
-    BLOCK_SIZE_N = 128
-    BLOCK_SIZE_K = 32
+    # 2. 定义 Grid (启动多少个线程)
+    # 我们需要 M * K 个线程，每个线程算一个 C 的元素。
+    # Grid 可以是 1D, 2D, 或 3D 的。这里用 2D 最直观。
+    grid = (M, K)
     
-    # The grid is (number of blocks in M direction * number of blocks in N direction)
-    # The kernel handles the grouping logic internally
-    grid = lambda META: (triton.cdiv(M, META['BLOCK_SIZE_M']) * triton.cdiv(N, META['BLOCK_SIZE_N']), )
-    
-    # 2. Launch the kernel.
-    matmul_kernel[grid](
-        A, B, C,
+    # 3. 启动 Kernel
+    matrix_multiplication_kernel[grid](
+        # 指针
+        a, b, c,
+        # 维度
         M, N, K,
-        A.stride(0), A.stride(1),
-        B.stride(0), B.stride(1),
-        C.stride(0), C.stride(1),
-        BLOCK_SIZE_M=BLOCK_SIZE_M,
-        BLOCK_SIZE_N=BLOCK_SIZE_N,
-        BLOCK_SIZE_K=BLOCK_SIZE_K,
+        # 步长
+        stride_am, stride_an,
+        stride_bk, stride_bn,
+        stride_cm, stride_ck
     )
