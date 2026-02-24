@@ -1,143 +1,64 @@
-# 02. Matrix Multiplication (矩阵乘法) - Naive Version
+# 02. Matrix Multiplication (Triton Naive Implementation Plan)
 
-## 题目描述
+用户要求按照指定的 Naive（朴素）框架实现矩阵乘法的 Triton 版本，并提供一份像 `01_vector_add` 那样极其详细的文档。
 
-编写一个 GPU 程序，执行两个 32 位浮点数矩阵的乘法。给定一个维度为 $M \times N$ 的矩阵 $A$ 和一个维度为 $N \times K$ 的矩阵 $B$，计算乘积矩阵 $C = A \times B$，其维度为 $M \times K$。所有矩阵都以行优先格式存储。
+**用户提供的框架（Naive Kernel）特点：**
 
-### 实现要求
+* **Grid**: `(M, K)` —— 每个 Program 处理 $C$ 矩阵中的**一个元素**。
 
-*   仅使用原生特性（不允许使用外部库的 matmul 函数，但在 PyTorch 解法中可以使用 `torch.mm` 或 `torch.matmul` 作为基准）。
-*   `solve` 函数签名必须保持不变。
-*   最终结果必须存储在矩阵 `C` 中。
+* **Stride**: 手动传递了 stride 参数。
 
-## 解题思路
+* **逻辑**: 既然每个 Program 处理一个元素，那么 Kernel 内部就是一个简单的 for 循环（从 0 到 N-1），计算点积。
 
-### 方法 1：PyTorch 原生实现 (High-Level)
+**注意**：这与我之前生成的 `solution_triton.py`（使用了 Block Tiling 优化）完全不同。用户的这个版本是**教学用的入门版**，虽然性能不如 Tiling 版，但逻辑更直观，非常适合作为教程的第一步。
 
-参考 [README_PYTORCH.md](README_PYTORCH.md)（这里简略带过，重点讲 Triton）。
-推荐写法：`torch.mm(A, B, out=C)`。
+## 1. 任务拆解
 
-### 方法 2：Triton Naive 实现 (Low-Level 入门)
+### 1.1 更新 `solution_triton.py 这个文件要写超详细逐行的注释`
 
-这是一个**教学级**的实现，不包含任何复杂的性能优化（如分块、Shared Memory），旨在帮你理解 Triton 的基本语法和 Grid 映射逻辑。
+* 将现有的 Tiling 版本替换为用户指定的 Naive 版本。
 
-#### 1. 核心心法：每人算一个格子（小学生排队比喻）
+* 实现 `matrix_multiplication_kernel`：
 
-想象我们要计算 $C = A \times B$。假设 $A$ 和 $B$ 都是 $2 \times 2$ 的矩阵（为了简单）：
+  * 获取 `pid_m` 和 `pid_k` (通过 `tl.program_id`)。
 
-$$
-\begin{bmatrix}
-A_{00} & A_{01} \\
-A_{10} & A_{11}
-\end{bmatrix}
-\times
-\begin{bmatrix}
-B_{00} & B_{01} \\
-B_{10} & B_{11}
-\end{bmatrix}
-=
-\begin{bmatrix}
-C_{00} & C_{01} \\
-C_{10} & C_{11}
-\end{bmatrix}
-$$
+  * 初始化累加器 `acc = 0.0`。
 
-我们的目标是算出 $C$ 里面那 4 个格子的值。
+  * 循环 `n` 从 0 到 `N`：
 
-*   **Triton 的“人海战术” (Grid)**：
-    *   既然有 4 个格子要算，我们就雇 **4 个工人**（Program/Thread）！
-    *   **Grid = (2, 2)**：启动 2 行 2 列，共 4 个工人。
-    *   每个工人都有自己的编号 `(pid_m, pid_k)`：
-        *   **工人 (0, 0)**：负责算 $C_{00}$
-        *   **工人 (0, 1)**：负责算 $C_{01}$
-        *   **工人 (1, 0)**：负责算 $C_{10}$
-        *   **工人 (1, 1)**：负责算 $C_{11}$
+    * 计算 A 的地址：`a_ptr + pid_m * stride_am + n * stride_an`
 
-*   **工人怎么干活？（以工人 (0, 0) 为例）**
-    *   **任务**：算出 $C_{00}$。
-    *   **公式**：$C_{00} = \text{A的第一行} \times \text{B的第一列} = A_{00} \times B_{00} + A_{01} \times B_{10}$
-    *   代码里的 `for n in range(0, N):` 就是在做这个“对应相乘再累加”的过程。
-        *   **第 1 轮 (n=0)**：去 A 里拿 $A_{00}$，去 B 里拿 $B_{00}$，算 $A_{00} \times B_{00}$，记在小本本上。
-        *   **第 2 轮 (n=1)**：去 A 里拿 $A_{01}$，去 B 里拿 $B_{10}$，算 $A_{01} \times B_{10}$，加到小本本上。
+    * 计算 B 的地址：`b_ptr + n * stride_bn + pid_k * stride_bk`
 
-#### 2. 关键概念：步长 (Stride)
+    * 加载并累加：`acc += load(a_ptr) * load(b_ptr)`
 
-电脑内存是一条长长的纸带，**不是**二维表格。
-矩阵 $A$ 在内存里是这样排队的：
-`[A00, A01, A10, A11]`
+  * 计算 C 的地址并写回：`c_ptr + pid_m * stride_cm + pid_k * stride_ck`
 
-*   **问题**：工人 (1, 0) 想要找 $A_{10}$，他怎么知道在纸带的第几个位置？
-*   **Stride (步长)**：
-    *   **Stride_AM (行步长)**：每换一行，要跳过几个数？
-        *   A 有 2 列，所以换行要跳过 2 个数。`stride_am = 2`。
-    *   **Stride_AN (列步长)**：每换一列，要跳过几个数？
-        *   就在隔壁，所以跳过 1 个数。`stride_an = 1`。
-*   **寻址公式**：`地址 = pid_m * stride_am + n * stride_an`
-*   **验证**：工人 (1, 0) 想找 $A_{10}$ (第 1 行，第 0 列)：
-    `地址 = 1 * 2 + 0 * 1 = 2`。内存里第 0、1、**2** 号位置，正好就是 $A_{10}$！
+### 1.2 更新 `README.md`
 
-#### 3. 代码逐行详解
+* 需要重写 Triton 部分，适配这个 Naive 版本的逻辑。
 
-```python
-@triton.jit
-def matrix_multiplication_kernel(
-    a_ptr, b_ptr, c_ptr,
-    M, N, K,
-    stride_am, stride_an,  # A 的步长
-    stride_bk, stride_bn,  # B 的步长
-    stride_cm, stride_ck   # C 的步长
-):
-    # 1. 身份确认：我是负责哪个格子的工人？
-    # 我们启动的 grid 是 (M, K)
-    # axis=0 是第一维 (M)，axis=1 是第二维 (K)
-    pid_m = tl.program_id(axis=0)  # 我负责第 pid_m 行
-    pid_k = tl.program_id(axis=1)  # 我负责第 pid_k 列
-    
-    # 2. 准备累加器
-    # C[pid_m, pid_k] 的值初始为 0 (我的小本本)
-    accumulator = 0.0
-    
-    # 3. 循环计算点积
-    # C[m, k] = Sum( A[m, n] * B[n, k] ) for n in 0..N
-    for n in range(0, N):
-        # --- 定位 A[pid_m, n] ---
-        # 也就是：A 的第 pid_m 行，第 n 列
-        # 寻址公式：基地址 + 行偏移 + 列偏移
-        offs_a = a_ptr + (pid_m * stride_am + n * stride_an)
-        
-        # --- 定位 B[n, pid_k] ---
-        # 也就是：B 的第 n 行，第 pid_k 列
-        offs_b = b_ptr + (n * stride_bn + pid_k * stride_bk)
-        
-        # --- 读取并累加 ---
-        # tl.load 从 Global Memory 读数据到寄存器
-        val_a = tl.load(offs_a)
-        val_b = tl.load(offs_b)
-        accumulator += val_a * val_b
-        
-    # 4. 写回结果
-    # 算出最终结果后，写回 C[pid_m, pid_k]
-    # 寻址公式同上
-    offs_c = c_ptr + (pid_m * stride_cm + pid_k * stride_ck)
-    tl.store(offs_c, accumulator)
-```
+* **文档结构规划**：
 
-#### 4. 性能分析 (为什么这个版本慢？)
+  * **核心比喻**：从“包工头分砖块”（Tiling）退回到“每人算一个格子”（Naive）。
 
-虽然这个版本逻辑简单，但它犯了 GPU 编程的大忌：**重复读取 Global Memory**。
+  * **代码逐行解析**：
 
-*   **算一下**：
-    *   计算 $C[0, 0]$ 需要读 $A$ 的第 0 行。
-    *   计算 $C[0, 1]$ **也需要读** $A$ 的第 0 行。
-    *   ...
-    *   计算 $C[0, K-1]$ **全都要读** $A$ 的第 0 行。
-*   **后果**：$A$ 的第 0 行被从显存里重复读取了 $K$ 次！
-*   **改进方向**：这就是为什么我们需要 **Tiling (分块)** 和 **Shared Memory**。我们可以把 $A$ 的第 0 行读一次放到“公共桌子”（Shared Memory）上，让大家一起用，从而减少几百倍的显存读取。这将在进阶版本中介绍。
+    * 解释 `grid = (M, K)` 的含义（启动 $M \times K$ 个线程）。
 
-## 运行与测试
+    * 解释 `stride`（步长）的概念：为什么二维数组在内存里是一维的？如何通过 stride 找到 `(i, j)`？
 
-可以直接运行 `tests.py` 进行验证。由于这是朴素版本，对于大矩阵（如 4096 x 4096），它会比 PyTorch 慢很多，这是符合预期的。
+    * 解释点积循环逻辑。
 
-```bash
-python tests.py
-```
+  * **性能分析（预告）**：为什么这种写法很慢？（引出 Global Memory 读写过多的问题，为以后讲 Tiling 做铺垫）。
+
+### 1.3 验证
+
+* 确保 `tests.py` 依然能跑通（逻辑正确性不变，只是速度变慢）。
+
+## 2. 详细步骤
+
+1. **修改代码**：重写 `d:\my_dev\leetgpu-pytorch\01_leetgpu_problems\easy\02_matrix_multiplication\solution_triton.py`。
+2. **修改文档**：重写 `d:\my_dev\leetgpu-pytorch\01_leetgpu_problems\easy\02_matrix_multiplication\README.md`，添加大量注释和图解。
+3. **Git 提交**：提交更改。
+
