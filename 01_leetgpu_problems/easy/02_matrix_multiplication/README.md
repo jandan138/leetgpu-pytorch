@@ -1,4 +1,4 @@
-# 02. Matrix Multiplication (矩阵乘法) - Naive Version
+# 02. Matrix Multiplication (矩阵乘法)
 
 ## 题目描述
 
@@ -198,10 +198,206 @@ def matrix_multiplication_kernel(
 *   **后果**：$A$ 的第 0 行被从显存里重复读取了 $K$ 次！
 *   **改进方向**：这就是为什么我们需要 **Tiling (分块)** 和 **Shared Memory**。我们可以把 $A$ 的第 0 行读一次放到“公共桌子”（Shared Memory）上，让大家一起用，从而减少几百倍的显存读取。这将在进阶版本中介绍。
 
+### 方法 3：Triton Tiled 分块实现 (Low-Level 进阶)
+
+> 完整代码：[solution_triton_tiled.py](solution_triton_tiled.py)
+
+#### 1. 朴素版的根本问题
+
+朴素版（方法 2）有两个致命缺陷：
+
+**缺陷 A：每个 Program 只有 1 个 thread，SM 严重闲置**
+
+```text
+朴素版：
+  每个 Program = 1 thread（全标量操作）
+  RTX 4090 每个 SM = 128 CUDA core
+  → 127 个 core 在等待，利用率 < 1%
+```
+
+**缺陷 B：Global Memory 数据被重复读取**
+
+计算 `C[0, 0]` 需要读 A 的第 0 行（N 个数）。
+计算 `C[0, 1]` **也**需要读 A 的第 0 行（N 个数）。
+……
+计算 `C[0, K-1]` 还是需要读 A 的第 0 行（N 个数）。
+
+A 的第 0 行被重复读了 **K 次**。Global Memory 的延迟约 600 个时钟周期，这些读取浪费了绝大多数时间。
+
+#### 2. 分块的核心思想
+
+把 C 矩阵切割成 **BM×BK** 大小的 tile（小块）：
+
+```text
+C 矩阵（M×K）被分成若干 BM×BK 的 tile：
+
+    ┌─────┬─────┬─────┐
+    │tile │tile │tile │  ← 每行有 ceil(K/BK) 个 tile
+    │(0,0)│(0,1)│(0,2)│
+    ├─────┼─────┼─────┤
+    │tile │tile │tile │
+    │(1,0)│(1,1)│(1,2)│
+    ├─────┼─────┼─────┤
+    │tile │tile │tile │
+    │(2,0)│(2,1)│(2,2)│
+    └─────┴─────┴─────┘
+    ↑ 每列有 ceil(M/BM) 个 tile
+
+每个 Program 负责一个 tile（由 pid_m, pid_k 确定）。
+```
+
+向量化公式：
+
+```text
+C[m:m+BM, k:k+BK]
+  = A[m:m+BM, 0:BN]   @ B[0:BN,   k:k+BK]
+  + A[m:m+BM, BN:2BN]  @ B[BN:2BN,  k:k+BK]
+  + A[m:m+BM, 2BN:3BN] @ B[2BN:3BN, k:k+BK]
+  + ...
+```
+
+每次加载的是**整块**数据（BM×BN 或 BN×BK），然后用 `tl.dot` 一次性完成 tile 级矩阵乘。
+
+#### 3. 两个版本的对比
+
+```text
+朴素版（solution_triton.py）          分块版（solution_triton_tiled.py）
+──────────────────────────────────    ──────────────────────────────────────
+Grid = (M, K)                         Grid = (ceil(M/BM), ceil(K/BK))
+Program 数量 = M×K                    Program 数量 = ceil(M/BM) × ceil(K/BK)
+                                        通常远小于 M×K
+
+每 Program：1 thread                  每 Program：BM×BK 个 thread
+每次 tl.load：1 个 float（4字节）      每次 tl.load：BM×BN 或 BN×BK 个 float
+                                        （如 32×32 = 1024 个，4096 字节）
+
+accumulator = 0.0（1 个寄存器）       acc = tl.zeros((BM, BK))（BM×BK 个寄存器）
+accumulator += val_a * val_b          acc += tl.dot(a_tile, b_tile)
+（标量乘加）                           （tile 级矩阵乘，可用 Tensor Core）
+
+SM core 利用率：极低（<1%）           SM core 利用率：高（取决于 BM/BK 大小）
+```
+
+#### 4. 关键代码逐行解析
+
+```python
+@triton.jit
+def matmul_tiled_kernel(
+    a_ptr, b_ptr, c_ptr,
+    M, N, K,
+    stride_am, stride_an,
+    stride_bn, stride_bk,
+    stride_cm, stride_ck,
+    BM: tl.constexpr, BN: tl.constexpr, BK: tl.constexpr,
+):
+    pid_m = tl.program_id(0)   # tile 行编号
+    pid_k = tl.program_id(1)   # tile 列编号
+
+    m_start = pid_m * BM       # 当前 tile 在 C 里的起始行
+    k_start = pid_k * BK       # 当前 tile 在 C 里的起始列
+
+    # tl.arange 是关键：生成向量化索引，隐式下沉到 thread
+    offs_m = m_start + tl.arange(0, BM)   # [BM] → BM 个 thread 各持一个值
+    offs_k = k_start + tl.arange(0, BK)   # [BK] → BK 个 thread 各持一个值
+
+    # BM×BK 的累加器（每个 thread 持有输出 tile 里自己对应的那个元素）
+    acc = tl.zeros((BM, BK), dtype=tl.float32)
+
+    for n_start in range(0, N, BN):
+        offs_n = n_start + tl.arange(0, BN)   # [BN]
+
+        # ── 2D 指针矩阵（外积广播）──────────────────────────────────────
+        # offs_m[:, None] 的 shape：[BM, 1]
+        # offs_n[None, :] 的 shape：[1, BN]
+        # 广播后 a_ptrs 的 shape：[BM, BN]
+        # a_ptrs[i, j] = a_ptr + offs_m[i]*stride_am + offs_n[j]*stride_an
+        a_ptrs = a_ptr + offs_m[:, None] * stride_am + offs_n[None, :] * stride_an
+        mask_a = (offs_m[:, None] < M) & (offs_n[None, :] < N)
+        a_tile = tl.load(a_ptrs, mask=mask_a, other=0.0)  # [BM, BN]
+
+        b_ptrs = b_ptr + offs_n[:, None] * stride_bn + offs_k[None, :] * stride_bk
+        mask_b = (offs_n[:, None] < N) & (offs_k[None, :] < K)
+        b_tile = tl.load(b_ptrs, mask=mask_b, other=0.0)  # [BN, BK]
+
+        # ── tile 级矩阵乘 ────────────────────────────────────────────────
+        # [BM, BN] × [BN, BK] → [BM, BK]
+        # 内部使用 Tensor Core（当 BN ≥ 16，数据类型为 FP16/BF16 时效果最好）
+        # allow_tf32=False：保证 FP32 精度
+        acc += tl.dot(a_tile, b_tile, allow_tf32=False)
+
+    # 写回 C tile
+    c_ptrs = c_ptr + offs_m[:, None] * stride_cm + offs_k[None, :] * stride_ck
+    mask_c = (offs_m[:, None] < M) & (offs_k[None, :] < K)
+    tl.store(c_ptrs, acc, mask=mask_c)
+```
+
+#### 5. 关于 `tl.zeros` 和 `tl.dot` 的本质
+
+**`tl.zeros((BM, BK))`**：
+
+在分块版里，accumulator 不再是 1 个标量，而是 BM×BK 个独立的寄存器。
+每个 thread 持有 acc 矩阵里**自己位置**的那一个 float。
+BM=BK=32 时，每个 Program 有 32×32=1024 个 thread，各自维护 1 个 float 寄存器作为自己的累加器。
+
+```text
+acc[0][0] 在 thread(0,0) 的寄存器里
+acc[0][1] 在 thread(0,1) 的寄存器里
+...
+acc[31][31] 在 thread(31,31) 的寄存器里
+1024 个 thread，各自独立累加，零争用
+```
+
+**`tl.dot(a_tile, b_tile)`**：
+
+这不是逐元素乘法，而是**矩阵乘法**（类似 `numpy.matmul`）。
+在 GPU 底层，如果数据类型和维度满足条件，Triton 编译器会自动生成
+使用 **Tensor Core** 的 `mma.sync` 指令，比普通 CUDA core 快 4~8 倍。
+
+#### 6. 配置参数如何影响性能
+
+| 参数 | 偏小（如 16） | 推荐（32~64） | 偏大（如 128） |
+|:---|:---|:---|:---|
+| BM、BK | Program 数量多，调度开销大 | 均衡 | 寄存器溢出，occupancy 下降 |
+| BN | 每次加载数据少，循环次数多 | 均衡 | 每次加载太多，片外内存压力大 |
+| **通用建议** | BM、BK、BN 均取 32 或 64，用 `@triton.autotune` 自动搜索最优值 | | |
+
+实际项目中，你会看到这样的写法：
+
+```python
+@triton.autotune(
+    configs=[
+        triton.Config({'BM': 128, 'BN': 32, 'BK': 64}),
+        triton.Config({'BM': 64,  'BN': 32, 'BK': 64}),
+        triton.Config({'BM': 32,  'BN': 32, 'BK': 32}),
+    ],
+    key=['M', 'N', 'K']
+)
+@triton.jit
+def matmul_tiled_kernel(...):
+    ...
+```
+
+`@triton.autotune` 会在真实数据上跑每种配置，自动记住最快的那个。
+
+---
+
 ## 运行与测试
 
-可以直接运行 `tests.py` 进行验证。由于这是朴素版本，对于大矩阵（如 4096 x 4096），它会比 PyTorch 慢很多，这是符合预期的。
-
 ```bash
+# 测试朴素版 Triton
 python tests.py
+
+# 测试分块版 Triton（需要 Triton 已安装）
+python -c "
+import torch, solution_triton_tiled as s
+M, N, K = 512, 512, 512
+a = torch.randn(M, N, device='cuda')
+b = torch.randn(N, K, device='cuda')
+c = torch.zeros(M, K, device='cuda')
+s.solve(a, b, c, M, N, K)
+ref = torch.mm(a, b)
+print('Max diff:', (c - ref).abs().max().item())
+"
 ```
+
+**注意**：Triton 目前在 Windows 上没有官方 wheel，需在 Linux/WSL 环境下运行。
