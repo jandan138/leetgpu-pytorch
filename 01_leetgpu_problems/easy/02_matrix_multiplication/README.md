@@ -96,6 +96,52 @@ $$
 
 #### 3. 代码逐行详解
 
+#### 3.1 调用关系（从 Python 到 GPU，一条链路讲清楚）
+
+在 [solution_triton.py](file:///d:/my_dev/leetgpu-pytorch/01_leetgpu_problems/easy/02_matrix_multiplication/solution_triton.py) 里你会看到两个函数：
+
+*   `solve(...)`：**Python 端（Host / 包工头）**。负责做准备工作、决定要启动多少个“工人”、然后“发号施令”启动 GPU Kernel。
+*   `matrix_multiplication_kernel(...)`：**GPU 端（Device / 工人）**。真正跑在 GPU 上，执行逐元素点积，把结果写进 `c`。
+
+把它们想成两个世界：
+
+```text
+CPU / Python 世界 (Host)                    GPU 世界 (Device)
+------------------------                   -------------------------
+tests.py / 你的代码
+    |
+    v
+solution_triton.solve(a, b, c, M, N, K)
+    |  1) 计算 stride（行步长/列步长）
+    |  2) 决定 grid = (M, K)
+    |  3) 启动 kernel
+    v
+matrix_multiplication_kernel[grid](...)
+                                            每个 (pid_m, pid_k) 工人并行执行：
+                                            - 只算一个元素 c[pid_m, pid_k]
+                                            - 在 for n in range(N) 里做点积
+                                            - tl.store 写回结果
+```
+
+这里最容易让人迷惑的一句是：
+
+```python
+matrix_multiplication_kernel[grid](...)
+```
+
+它不是 Python 的“下标访问”。它的含义是：
+
+*   `matrix_multiplication_kernel`：一份“工人施工说明书”（被 `@triton.jit` 标记，Triton 会把它编译成 GPU 代码）
+*   `[grid]`：告诉 Triton 你要雇多少工人、怎么排队（这里是 2D 网格：M 行 K 列）
+*   `(...)`：把参数（指针、维度、stride）发给每一个工人
+
+所以真正的“调用关系”可以用一句话总结：
+
+```text
+solve() 在 CPU 上运行，负责 launch；
+kernel() 在 GPU 上运行，负责计算与写回。
+```
+
 ```python
 @triton.jit
 def matrix_multiplication_kernel(
