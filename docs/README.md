@@ -68,3 +68,13 @@
 5.  **[Warp vs Triton](tutorials/gpu_ecosystem/05_warp_vs_triton.md)**
     *   **核心问题**：它们是竞争关系吗？
     *   **结论**：不是。它们是兄弟，一个负责修内功（加速神经网络），一个负责练外功（模拟物理世界）。
+
+---
+
+## 🔧 常见问题排查 (Troubleshooting)
+
+如果在配置或运行过程中遇到问题，请参考以下指南：
+
+*   **[Triton 运行时错误：找不到 C 编译器](troubleshooting.md#1-triton-运行时错误找不到-c-编译器)**
+    *   **现象**：`RuntimeError: Failed to find C compiler`
+    *   **原因**：环境缺失 `gcc/g++` 等基础构建工具。
