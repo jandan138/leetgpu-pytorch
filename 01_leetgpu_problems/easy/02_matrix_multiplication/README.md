@@ -198,6 +198,29 @@ def matrix_multiplication_kernel(
 *   **后果**：$A$ 的第 0 行被从显存里重复读取了 $K$ 次！
 *   **改进方向**：这就是为什么我们需要 **Tiling (分块)** 和 **Shared Memory**。我们可以把 $A$ 的第 0 行读一次放到“公共桌子”（Shared Memory）上，让大家一起用，从而减少几百倍的显存读取。这将在进阶版本中介绍。
 
+#### 5. 性能对比：朴素版 vs 分块版
+
+我们在 NVIDIA A800 (80GB SXM4) 上进行了实测（矩阵大小 M=N=K=4096）：
+
+| 实现版本 | 执行时间 (ms) | TFLOPS (理论估算) | 相对性能 |
+| :--- | :--- | :--- | :--- |
+| **PyTorch (cuBLAS)** | 2.61 ms | ~52.6 | 1.0x (基准) |
+| **Triton Tiled (分块)** | 4.53 ms | ~30.3 | 0.58x |
+| **Triton Naive (朴素)** | 3674.78 ms | ~0.037 | **0.0007x** |
+
+**惊人的差距：**
+*   **分块版比朴素版快了约 811 倍！**
+*   朴素版几乎无法利用 GPU 的计算能力（Tensor Cores 闲置，全卡在等显存）。
+*   分块版通过复用数据和向量化加载，将性能提升到了接近 cuBLAS 的水平。
+
+**理论加速比估算：**
+假设 Block Size $BM=32, BN=32, BK=32$。
+*   **朴素版访存**：计算每个 C 元素需要读 $2N$ 个 float。总访存量 $\approx M \cdot K \cdot 2N \cdot 4$ 字节。
+*   **分块版访存**：计算一个 $32 \times 32$ 的 C block，需要读 $N/32$ 次 A block ($32 \times 32$) 和 B block ($32 \times 32$)。
+    *   平均每个 C 元素分摊的访存量 $\approx (2N \cdot 32)/ (32 \cdot 32) = 2N/32$。
+*   **理论节省倍数**：$32$ 倍。
+    *   但这只是显存带宽的节省。考虑到朴素版无法合并访存（Memory Coalescing 差）、无法利用 Tensor Core（计算慢 10 倍以上）、以及极高的指令开销，实际 800 多倍的差距是完全合理的。
+
 ### 方法 3：Triton Tiled 分块实现 (Low-Level 进阶)
 
 > 完整代码：[solution_triton_tiled.py](solution_triton_tiled.py)
