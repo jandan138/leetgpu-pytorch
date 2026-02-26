@@ -37,6 +37,10 @@ def matrix_multiplication_kernel(
     # --- 2. 初始化累加器 ---
     # 我们要计算 C[pid_m, pid_k]，它是一个标量 (Scalar)。
     # 用一个 32 位浮点数寄存器来存它。
+    # 只有当 pid_m < M 且 pid_k < K 时，才需要计算
+    if pid_m >= M or pid_k >= K:
+        return
+
     accumulator = 0.0
     
     # --- 3. 计算点积 (Dot Product) ---
@@ -45,24 +49,39 @@ def matrix_multiplication_kernel(
     for n in range(0, N):
         # 3.1 定位 A[pid_m, n] 在内存中的地址
         # 指针 = 基地址 + (行索引 * 行步长) + (列索引 * 列步长)
-        offs_a = a_ptr + (pid_m * stride_am + n * stride_an)
+        # 注意：这里的 stride_am 和 stride_an 实际上是 PyTorch tensor 的 stride
+        # 对于行优先矩阵，stride(0) 是行步长（N），stride(1) 是列步长（1）
+        # 使用 tl.cast 确保索引计算使用 64 位整数，防止溢出
+        offs_a = a_ptr + (pid_m * stride_am + n * stride_an).to(tl.int64)
         
         # 3.2 定位 B[n, pid_k] 在内存中的地址
         # 注意：这里 B 的行索引是 n，列索引是 pid_k
-        offs_b = b_ptr + (n * stride_bn + pid_k * stride_bk)
+        offs_b = b_ptr + (n * stride_bn + pid_k * stride_bk).to(tl.int64)
         
         # 3.3 读取数据 (Load)
         # 从 Global Memory 读一个数到寄存器
-        val_a = tl.load(offs_a)
-        val_b = tl.load(offs_b)
+        # 需要处理边界情况：如果当前行或列超出矩阵范围，则加载0
+        # 这里的类型转换非常重要，确保指针计算是在 int64 下进行的
+        # 虽然 Triton 通常会自动处理，但在某些情况下明确类型更安全
+        if pid_m < M and n < N:
+            val_a = tl.load(offs_a)
+        else:
+            val_a = 0.0
+            
+        if n < N and pid_k < K:
+            val_b = tl.load(offs_b)
+        else:
+            val_b = 0.0
         
         # 3.4 累加 (Accumulate)
         accumulator += val_a * val_b
         
     # --- 4. 写回结果 (Store) ---
     # 算完了，把 accumulator 里的值写回 C[pid_m, pid_k]
+    # 需要处理边界情况：如果 pid_m >= M 或 pid_k >= K，则不写入
     offs_c = c_ptr + (pid_m * stride_cm + pid_k * stride_ck)
-    tl.store(offs_c, accumulator)
+    if pid_m < M and pid_k < K:
+        tl.store(offs_c, accumulator)
 
 
 # a, b, c are tensors on the GPU 
@@ -73,7 +92,7 @@ def solve(a: torch.Tensor, b: torch.Tensor, c: torch.Tensor, M: int, N: int, K: 
     # stride(0) = 3 (下一行要跳 3 个数)
     # stride(1) = 1 (下一列要跳 1 个数)
     stride_am, stride_an = a.stride(0), a.stride(1)
-    stride_bk, stride_bn = b.stride(0), b.stride(1)
+    stride_bn, stride_bk = b.stride(0), b.stride(1)
     stride_cm, stride_ck = c.stride(0), c.stride(1)
     
     # 2. 定义 Grid (启动多少个线程)
