@@ -28,17 +28,23 @@
 4. 使用 spawn 模板在主线程下达并行指令  
    `agent_team/templates/codex_spawn_prompt_template.md`
 5. 创建可编辑角色专属 worktree（强隔离）  
-   `bash agent_team/scripts/setup_run_worktrees.sh <run_id>`
+   Linux/macOS: `bash agent_team/scripts/setup_run_worktrees.sh <run_id>`  
+   Windows PowerShell: `powershell -ExecutionPolicy Bypass -File agent_team/scripts/setup_run_worktrees.ps1 -RunId <run_id>`
 6. 用 `/agent` 查看/切换子线程；同时更新 `runs/<run_id>/threads/registry.md`
 
 ## 跨平台运行（原生 Windows / Linux）
 - Linux/macOS 默认使用 `bash` 脚本（`*.sh`）。
 - 原生 Windows 默认使用 `PowerShell` 脚本（`*.ps1`）。
-- 目前已提供 PowerShell 原生版本：
+- 已提供 PowerShell 原生版本：
+  - `agent_team/scripts/bootstrap_agents.ps1`
   - `agent_team/scripts/codex_multi_agent_preflight.ps1`
   - `agent_team/scripts/init_run.ps1`
+  - `agent_team/scripts/setup_run_worktrees.ps1`
+  - `agent_team/scripts/teardown_run_worktrees.ps1`
+  - `agent_team/scripts/monitor_subagents.ps1`
+  - `agent_team/scripts/restart_stuck_subagent.ps1`
   - `agent_team/scripts/check_run_logs.ps1`
-- 其余尚未提供 `*.ps1` 的脚本可先在 Git Bash/WSL 执行，后续可按同样方式继续补齐。
+  - `agent_team/scripts/update_agent_memory.ps1`
 - 建议在 Windows 使用 `codex.cmd`，避免 `codex.ps1` 执行策略拦截。
 
 ## 目录结构
@@ -63,15 +69,21 @@ agent_team/
     codex_multi_agent_preflight.sh
     codex_multi_agent_preflight.ps1
     bootstrap_agents.sh
+    bootstrap_agents.ps1
     init_run.sh
     init_run.ps1
     setup_run_worktrees.sh
+    setup_run_worktrees.ps1
     teardown_run_worktrees.sh
+    teardown_run_worktrees.ps1
     monitor_subagents.sh
+    monitor_subagents.ps1
     restart_stuck_subagent.sh
+    restart_stuck_subagent.ps1
     check_run_logs.sh
     check_run_logs.ps1
     update_agent_memory.sh
+    update_agent_memory.ps1
   runs/
     <run_id>/
       logs/
@@ -105,25 +117,31 @@ agent_team/
   Linux/macOS: `bash agent_team/scripts/codex_multi_agent_preflight.sh`  
   Windows PowerShell: `powershell -ExecutionPolicy Bypass -File agent_team/scripts/codex_multi_agent_preflight.ps1`
 - 初始化/补齐全部 agent profile+memory  
-  `bash agent_team/scripts/bootstrap_agents.sh`
+  Linux/macOS: `bash agent_team/scripts/bootstrap_agents.sh`  
+  Windows PowerShell: `powershell -ExecutionPolicy Bypass -File agent_team/scripts/bootstrap_agents.ps1`
 - 初始化某次 run  
   Linux/macOS: `bash agent_team/scripts/init_run.sh <run_id>`  
   Windows PowerShell: `powershell -ExecutionPolicy Bypass -File agent_team/scripts/init_run.ps1 -RunId <run_id>`
 - 创建该 run 的并行隔离 worktrees（仅可编辑角色）  
-  `bash agent_team/scripts/setup_run_worktrees.sh <run_id> [base_ref]`
+  Linux/macOS: `bash agent_team/scripts/setup_run_worktrees.sh <run_id> [base_ref]`  
+  Windows PowerShell: `powershell -ExecutionPolicy Bypass -File agent_team/scripts/setup_run_worktrees.ps1 -RunId <run_id> [-BaseRef <base_ref>]`
 - 自定义 worktree 根目录（可选）  
   `AGENT_TEAM_WORKTREE_ROOT=/tmp/agent_team_worktrees/<repo>/<run_id> bash agent_team/scripts/setup_run_worktrees.sh <run_id>`
 - 清理该 run 的 worktrees  
-  `bash agent_team/scripts/teardown_run_worktrees.sh <run_id> [--delete-branches]`
+  Linux/macOS: `bash agent_team/scripts/teardown_run_worktrees.sh <run_id> [--delete-branches]`  
+  Windows PowerShell: `powershell -ExecutionPolicy Bypass -File agent_team/scripts/teardown_run_worktrees.ps1 -RunId <run_id> [-DeleteBranches]`
 - 巡检子代理心跳（默认慢等待，不设硬超时）  
-  `bash agent_team/scripts/monitor_subagents.sh <run_id> [--interval-min 10] [--stuck-min 45]`
+  Linux/macOS: `bash agent_team/scripts/monitor_subagents.sh <run_id> [--interval-min 10] [--stuck-min 45]`  
+  Windows PowerShell: `powershell -ExecutionPolicy Bypass -File agent_team/scripts/monitor_subagents.ps1 -RunId <run_id> [-IntervalMin 10] [-StuckMin 45]`
 - 子代理确认卡死后重启同角色线程  
-  `bash agent_team/scripts/restart_stuck_subagent.sh <run_id> <agent_id> <new_thread_id>`
+  Linux/macOS: `bash agent_team/scripts/restart_stuck_subagent.sh <run_id> <agent_id> <new_thread_id>`  
+  Windows PowerShell: `powershell -ExecutionPolicy Bypass -File agent_team/scripts/restart_stuck_subagent.ps1 -RunId <run_id> -AgentId <agent_id> -NewThreadId <new_thread_id>`
 - 校验 run 完整性（日志 + memory delta + delegation + thread registry + worktree registry）  
   Linux/macOS: `bash agent_team/scripts/check_run_logs.sh <run_id>`  
   Windows PowerShell: `powershell -ExecutionPolicy Bypass -File agent_team/scripts/check_run_logs.ps1 -RunId <run_id>`
 - 合并 run 增量记忆到长期 memory  
-  `bash agent_team/scripts/update_agent_memory.sh <run_id>`
+  Linux/macOS: `bash agent_team/scripts/update_agent_memory.sh <run_id>`  
+  Windows PowerShell: `powershell -ExecutionPolicy Bypass -File agent_team/scripts/update_agent_memory.ps1 -RunId <run_id>`
 
 ## Memory 策略
 默认策略：**按 run 归档，再合并长期记忆**。
@@ -141,11 +159,13 @@ agent_team/
 - 仅在“疑似卡死 -> 人工确认卡死”后才允许重启线程。
 - 心跳建议：每个活跃子代理建议每 10 分钟更新 `last_heartbeat_at`。
 - 巡检建议：主代理周期运行  
-  `bash agent_team/scripts/monitor_subagents.sh <run_id> --interval-min 10 --stuck-min 45`
+  Linux/macOS: `bash agent_team/scripts/monitor_subagents.sh <run_id> --interval-min 10 --stuck-min 45`  
+  Windows PowerShell: `powershell -ExecutionPolicy Bypass -File agent_team/scripts/monitor_subagents.ps1 -RunId <run_id> -IntervalMin 10 -StuckMin 45`
 - 人工确认卡死时，更新 `threads/registry.md` 该行为：
   - `status = stuck-confirmed`
   - `stuck_candidate = confirmed`
   - `notes` 记录确认原因与时间
 - 处置建议：确认卡死后，默认“重启同角色线程”  
-  `bash agent_team/scripts/restart_stuck_subagent.sh <run_id> <agent_id> <new_thread_id>`
+  Linux/macOS: `bash agent_team/scripts/restart_stuck_subagent.sh <run_id> <agent_id> <new_thread_id>`  
+  Windows PowerShell: `powershell -ExecutionPolicy Bypass -File agent_team/scripts/restart_stuck_subagent.ps1 -RunId <run_id> -AgentId <agent_id> -NewThreadId <new_thread_id>`
 - 详细规范见：`agent_team/references/wait-and-stuck-policy.md`

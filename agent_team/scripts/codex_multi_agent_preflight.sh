@@ -78,11 +78,14 @@ fi
 
 echo
 echo "Recommended next steps:"
-echo "1) bash agent_team/scripts/bootstrap_agents.sh"
-echo "2) bash agent_team/scripts/init_run.sh <run_id>"
-echo "   (Windows native: powershell -ExecutionPolicy Bypass -File agent_team/scripts/init_run.ps1 -RunId <run_id>)"
-echo "3) bash agent_team/scripts/setup_run_worktrees.sh <run_id>"
+echo "1) Linux/macOS: bash agent_team/scripts/bootstrap_agents.sh"
+echo "   Windows: powershell -ExecutionPolicy Bypass -File agent_team/scripts/bootstrap_agents.ps1"
+echo "2) Linux/macOS: bash agent_team/scripts/init_run.sh <run_id>"
+echo "   Windows: powershell -ExecutionPolicy Bypass -File agent_team/scripts/init_run.ps1 -RunId <run_id>"
+echo "3) Linux/macOS: bash agent_team/scripts/setup_run_worktrees.sh <run_id>"
+echo "   Windows: powershell -ExecutionPolicy Bypass -File agent_team/scripts/setup_run_worktrees.ps1 -RunId <run_id>"
 echo "4) Use template: agent_team/templates/codex_spawn_prompt_template.md"
 echo "5) In TUI use /agent to inspect/switch spawned sub-agent threads."
 echo "6) During long runs, monitor heartbeats:"
 echo "   bash agent_team/scripts/monitor_subagents.sh <run_id> --interval-min 10 --stuck-min 45"
+echo "   powershell -ExecutionPolicy Bypass -File agent_team/scripts/monitor_subagents.ps1 -RunId <run_id> -IntervalMin 10 -StuckMin 45"

@@ -44,7 +44,8 @@ When user intent is to "use agent team", follow `agent_team/README.md` and execu
    - Linux/macOS: `bash agent_team/scripts/init_run.sh <run_id>`
    - Windows PowerShell: `powershell -ExecutionPolicy Bypass -File agent_team/scripts/init_run.ps1 -RunId <run_id>`
 4. Prepare/edit isolated worktrees for editable roles:
-   - `bash agent_team/scripts/setup_run_worktrees.sh <run_id> [base_ref]`
+   - Linux/macOS: `bash agent_team/scripts/setup_run_worktrees.sh <run_id> [base_ref]`
+   - Windows PowerShell: `powershell -ExecutionPolicy Bypass -File agent_team/scripts/setup_run_worktrees.ps1 -RunId <run_id> [-BaseRef <base_ref>]`
 5. Delegate work with:
    - `/agent` thread switching
    - `agent_team/templates/codex_spawn_prompt_template.md`
@@ -55,17 +56,23 @@ When user intent is to "use agent team", follow `agent_team/README.md` and execu
    - Linux/macOS: `bash agent_team/scripts/check_run_logs.sh <run_id>`
    - Windows PowerShell: `powershell -ExecutionPolicy Bypass -File agent_team/scripts/check_run_logs.ps1 -RunId <run_id>`
 8. Merge run memory deltas into long-term memory:
-   - `bash agent_team/scripts/update_agent_memory.sh <run_id>`
+   - Linux/macOS: `bash agent_team/scripts/update_agent_memory.sh <run_id>`
+   - Windows PowerShell: `powershell -ExecutionPolicy Bypass -File agent_team/scripts/update_agent_memory.ps1 -RunId <run_id>`
 
 ## Cross-Platform Notes (Windows/Linux)
 
 - Linux/macOS should use the `*.sh` scripts under `agent_team/scripts/`.
 - Native Windows should prefer `*.ps1` scripts when provided.
 - Current PowerShell-native coverage:
+  - `agent_team/scripts/bootstrap_agents.ps1`
   - `agent_team/scripts/codex_multi_agent_preflight.ps1`
   - `agent_team/scripts/init_run.ps1`
+  - `agent_team/scripts/setup_run_worktrees.ps1`
+  - `agent_team/scripts/teardown_run_worktrees.ps1`
+  - `agent_team/scripts/monitor_subagents.ps1`
+  - `agent_team/scripts/restart_stuck_subagent.ps1`
   - `agent_team/scripts/check_run_logs.ps1`
-- For scripts that are still Bash-only, use Git Bash or WSL on Windows until PowerShell parity is added.
+  - `agent_team/scripts/update_agent_memory.ps1`
 - On Windows, prefer `codex.cmd` over `codex` in PowerShell sessions to avoid execution-policy issues with `codex.ps1`.
 
 ## Governance Rules (Agent Team)
@@ -84,10 +91,12 @@ When user intent is to "use agent team", follow `agent_team/README.md` and execu
 Default policy: slow-wait, no hard timeout by default.
 
 - Use heartbeat monitoring:
-  - `bash agent_team/scripts/monitor_subagents.sh <run_id> --interval-min 10 --stuck-min 45`
+  - Linux/macOS: `bash agent_team/scripts/monitor_subagents.sh <run_id> --interval-min 10 --stuck-min 45`
+  - Windows PowerShell: `powershell -ExecutionPolicy Bypass -File agent_team/scripts/monitor_subagents.ps1 -RunId <run_id> -IntervalMin 10 -StuckMin 45`
 - Restart only after human confirmation of "stuck":
   - update registry status to `stuck-confirmed`
-  - then run `bash agent_team/scripts/restart_stuck_subagent.sh <run_id> <agent_id> <new_thread_id>`
+  - then run Linux/macOS: `bash agent_team/scripts/restart_stuck_subagent.sh <run_id> <agent_id> <new_thread_id>`
+  - or Windows PowerShell: `powershell -ExecutionPolicy Bypass -File agent_team/scripts/restart_stuck_subagent.ps1 -RunId <run_id> -AgentId <agent_id> -NewThreadId <new_thread_id>`
 - Detailed policy:
   - `agent_team/references/wait-and-stuck-policy.md`
 
