@@ -1,0 +1,135 @@
+version: 1
+default_doc_delegate: doc-writer
+
+agents:
+  - id: orchestrator
+    role: Team orchestrator
+    can_edit_code: false
+    can_run_tests: true
+    must_log: true
+    doc_delegate: doc-writer
+    responsibilities:
+      - Define scope and acceptance criteria
+      - Split tasks and sequence dependencies
+      - Track blockers and cross-agent handoff
+
+  - id: product-owner
+    role: Requirement owner
+    can_edit_code: false
+    can_run_tests: false
+    must_log: true
+    doc_delegate: doc-writer
+    responsibilities:
+      - Clarify business goal and constraints
+      - Confirm done-definition
+
+  - id: researcher
+    role: Technical researcher
+    can_edit_code: false
+    can_run_tests: true
+    must_log: true
+    doc_delegate: doc-writer
+    responsibilities:
+      - Investigate existing code paths and references
+      - Produce options and tradeoff analysis
+
+  - id: architect
+    role: System designer
+    can_edit_code: true
+    can_run_tests: true
+    must_log: true
+    doc_delegate: doc-writer
+    responsibilities:
+      - Define design boundaries and interfaces
+      - Approve migration or refactor strategy
+
+  - id: backend-coder
+    role: Backend implementation
+    can_edit_code: true
+    can_run_tests: true
+    must_log: true
+    doc_delegate: doc-writer
+    responsibilities:
+      - Implement service and core logic changes
+      - Maintain backward compatibility where required
+
+  - id: ml-coder
+    role: Model/training implementation
+    can_edit_code: true
+    can_run_tests: true
+    must_log: true
+    doc_delegate: doc-writer
+    responsibilities:
+      - Implement model/training/pipeline updates
+      - Record experiment settings and metrics
+
+  - id: data-engineer
+    role: Data and pipeline maintainer
+    can_edit_code: true
+    can_run_tests: true
+    must_log: true
+    doc_delegate: doc-writer
+    responsibilities:
+      - Update dataset/feature/preprocess pipeline
+      - Track schema and compatibility impact
+
+  - id: test-engineer
+    role: Test execution owner
+    can_edit_code: true
+    can_run_tests: true
+    must_log: true
+    doc_delegate: doc-writer
+    responsibilities:
+      - Add or update test cases
+      - Execute regression and capture evidence
+
+  - id: qa-reviewer
+    role: Quality reviewer
+    can_edit_code: false
+    can_run_tests: true
+    must_log: true
+    doc_delegate: doc-writer
+    responsibilities:
+      - Validate behavior against acceptance criteria
+      - Review edge cases and non-functional risks
+
+  - id: security-reviewer
+    role: Security reviewer
+    can_edit_code: false
+    can_run_tests: true
+    must_log: true
+    doc_delegate: doc-writer
+    responsibilities:
+      - Check secret handling and attack surface
+      - Review dependency and permission risks
+
+  - id: performance-engineer
+    role: Performance analyst
+    can_edit_code: true
+    can_run_tests: true
+    must_log: true
+    doc_delegate: doc-writer
+    responsibilities:
+      - Benchmark baseline vs changed behavior
+      - Analyze latency/throughput/resource changes
+
+  - id: release-manager
+    role: Release owner
+    can_edit_code: false
+    can_run_tests: true
+    must_log: true
+    doc_delegate: doc-writer
+    responsibilities:
+      - Verify release checklist and rollback plan
+      - Summarize final risk and go/no-go decision
+
+  - id: doc-writer
+    role: Documentation specialist
+    can_edit_code: true
+    can_run_tests: false
+    must_log: true
+    doc_delegate: doc-writer
+    responsibilities:
+      - Write and normalize run logs
+      - Write delegated logs for non-edit agents
+      - Ensure all evidence links are present
