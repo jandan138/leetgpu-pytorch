@@ -13,6 +13,22 @@ DELTA_DIR="${TEAM_DIR}/runs/${RUN_ID}/memory"
 AGENT_ROOT="${TEAM_DIR}/agents"
 STAMP="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 
+SEARCH_BIN="rg"
+if ! command -v rg >/dev/null 2>&1; then
+  SEARCH_BIN="grep"
+  echo "WARN: rg not found. Falling back to grep for literal checks."
+fi
+
+contains_literal() {
+  local literal="$1"
+  local file="$2"
+  if [[ "${SEARCH_BIN}" == "rg" ]]; then
+    rg -n --fixed-strings "${literal}" "${file}" >/dev/null 2>&1
+  else
+    grep -n -F "${literal}" "${file}" >/dev/null 2>&1
+  fi
+}
+
 if [[ ! -d "${DELTA_DIR}" ]]; then
   echo "ERROR: missing delta dir: ${DELTA_DIR}"
   exit 2
@@ -35,7 +51,7 @@ for DELTA_FILE in "${DELTA_DIR}"/*.delta.md; do
   fi
 
   MARKER="- Run: ${RUN_ID}"
-  if rg -n --fixed-strings "${MARKER}" "${MEMORY_FILE}" >/dev/null 2>&1; then
+  if contains_literal "${MARKER}" "${MEMORY_FILE}"; then
     echo "SKIP: ${AGENT_ID} already merged for run ${RUN_ID}"
     continue
   fi

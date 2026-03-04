@@ -16,17 +16,30 @@
 
 ## Codex 官方能力接入方式
 1. 启用多代理能力（一次性）  
-   `codex features enable multi_agent`  
+   Linux/macOS: `codex features enable multi_agent`  
+   Windows PowerShell: `codex.cmd features enable multi_agent`  
    然后重启 Codex/TUI。
 2. 运行预检脚本  
-   `bash agent_team/scripts/codex_multi_agent_preflight.sh`
+   Linux/macOS: `bash agent_team/scripts/codex_multi_agent_preflight.sh`  
+   Windows PowerShell: `powershell -ExecutionPolicy Bypass -File agent_team/scripts/codex_multi_agent_preflight.ps1`
 3. 初始化 run  
-   `bash agent_team/scripts/init_run.sh <run_id>`
+   Linux/macOS: `bash agent_team/scripts/init_run.sh <run_id>`  
+   Windows PowerShell: `powershell -ExecutionPolicy Bypass -File agent_team/scripts/init_run.ps1 -RunId <run_id>`
 4. 使用 spawn 模板在主线程下达并行指令  
    `agent_team/templates/codex_spawn_prompt_template.md`
 5. 创建可编辑角色专属 worktree（强隔离）  
    `bash agent_team/scripts/setup_run_worktrees.sh <run_id>`
 6. 用 `/agent` 查看/切换子线程；同时更新 `runs/<run_id>/threads/registry.md`
+
+## 跨平台运行（原生 Windows / Linux）
+- Linux/macOS 默认使用 `bash` 脚本（`*.sh`）。
+- 原生 Windows 默认使用 `PowerShell` 脚本（`*.ps1`）。
+- 目前已提供 PowerShell 原生版本：
+  - `agent_team/scripts/codex_multi_agent_preflight.ps1`
+  - `agent_team/scripts/init_run.ps1`
+  - `agent_team/scripts/check_run_logs.ps1`
+- 其余尚未提供 `*.ps1` 的脚本可先在 Git Bash/WSL 执行，后续可按同样方式继续补齐。
+- 建议在 Windows 使用 `codex.cmd`，避免 `codex.ps1` 执行策略拦截。
 
 ## 目录结构
 ```text
@@ -48,13 +61,16 @@ agent_team/
     wait-and-stuck-policy.md
   scripts/
     codex_multi_agent_preflight.sh
+    codex_multi_agent_preflight.ps1
     bootstrap_agents.sh
     init_run.sh
+    init_run.ps1
     setup_run_worktrees.sh
     teardown_run_worktrees.sh
     monitor_subagents.sh
     restart_stuck_subagent.sh
     check_run_logs.sh
+    check_run_logs.ps1
     update_agent_memory.sh
   runs/
     <run_id>/
@@ -85,10 +101,14 @@ agent_team/
    - `Log Writer`
 
 ## 命令
+- 预检 multi-agent 与基础环境  
+  Linux/macOS: `bash agent_team/scripts/codex_multi_agent_preflight.sh`  
+  Windows PowerShell: `powershell -ExecutionPolicy Bypass -File agent_team/scripts/codex_multi_agent_preflight.ps1`
 - 初始化/补齐全部 agent profile+memory  
   `bash agent_team/scripts/bootstrap_agents.sh`
 - 初始化某次 run  
-  `bash agent_team/scripts/init_run.sh <run_id>`
+  Linux/macOS: `bash agent_team/scripts/init_run.sh <run_id>`  
+  Windows PowerShell: `powershell -ExecutionPolicy Bypass -File agent_team/scripts/init_run.ps1 -RunId <run_id>`
 - 创建该 run 的并行隔离 worktrees（仅可编辑角色）  
   `bash agent_team/scripts/setup_run_worktrees.sh <run_id> [base_ref]`
 - 自定义 worktree 根目录（可选）  
@@ -100,7 +120,8 @@ agent_team/
 - 子代理确认卡死后重启同角色线程  
   `bash agent_team/scripts/restart_stuck_subagent.sh <run_id> <agent_id> <new_thread_id>`
 - 校验 run 完整性（日志 + memory delta + delegation + thread registry + worktree registry）  
-  `bash agent_team/scripts/check_run_logs.sh <run_id>`
+  Linux/macOS: `bash agent_team/scripts/check_run_logs.sh <run_id>`  
+  Windows PowerShell: `powershell -ExecutionPolicy Bypass -File agent_team/scripts/check_run_logs.ps1 -RunId <run_id>`
 - 合并 run 增量记忆到长期 memory  
   `bash agent_team/scripts/update_agent_memory.sh <run_id>`
 

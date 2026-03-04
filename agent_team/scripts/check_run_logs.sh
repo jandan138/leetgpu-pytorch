@@ -39,17 +39,33 @@ if [[ ! -f "${THREAD_REGISTRY}" ]]; then
   exit 2
 fi
 
-if ! rg -n --fixed-strings "last_heartbeat_at" "${THREAD_REGISTRY}" >/dev/null 2>&1; then
+SEARCH_BIN="rg"
+if ! command -v rg >/dev/null 2>&1; then
+  SEARCH_BIN="grep"
+  echo "WARN: rg not found. Falling back to grep for literal checks."
+fi
+
+contains_literal() {
+  local literal="$1"
+  local file="$2"
+  if [[ "${SEARCH_BIN}" == "rg" ]]; then
+    rg -n --fixed-strings "${literal}" "${file}" >/dev/null 2>&1
+  else
+    grep -n -F "${literal}" "${file}" >/dev/null 2>&1
+  fi
+}
+
+if ! contains_literal "last_heartbeat_at" "${THREAD_REGISTRY}"; then
   echo "ERROR: thread registry header is outdated, missing last_heartbeat_at"
   exit 2
 fi
 
-if ! rg -n --fixed-strings "heartbeat_interval_min" "${THREAD_REGISTRY}" >/dev/null 2>&1; then
+if ! contains_literal "heartbeat_interval_min" "${THREAD_REGISTRY}"; then
   echo "ERROR: thread registry header is outdated, missing heartbeat_interval_min"
   exit 2
 fi
 
-if ! rg -n --fixed-strings "stuck_candidate" "${THREAD_REGISTRY}" >/dev/null 2>&1; then
+if ! contains_literal "stuck_candidate" "${THREAD_REGISTRY}"; then
   echo "ERROR: thread registry header is outdated, missing stuck_candidate"
   exit 2
 fi
@@ -112,7 +128,7 @@ for AGENT in "${AGENTS[@]}"; do
     FAILED=1
   else
     for HEADER in "${LOG_HEADERS[@]}"; do
-      if ! rg -n --fixed-strings "${HEADER}" "${LOG_FILE}" >/dev/null 2>&1; then
+      if ! contains_literal "${HEADER}" "${LOG_FILE}"; then
         echo "INVALID: ${LOG_FILE} missing header: ${HEADER}"
         FAILED=1
       fi
@@ -124,7 +140,7 @@ for AGENT in "${AGENTS[@]}"; do
     FAILED=1
   else
     for HEADER in "${MEMORY_HEADERS[@]}"; do
-      if ! rg -n --fixed-strings "${HEADER}" "${MEMORY_FILE}" >/dev/null 2>&1; then
+      if ! contains_literal "${HEADER}" "${MEMORY_FILE}"; then
         echo "INVALID: ${MEMORY_FILE} missing header: ${HEADER}"
         FAILED=1
       fi
@@ -140,8 +156,8 @@ for AGENT in "${AGENTS[@]}"; do
       HAS_HANDOFF=1
     fi
 
-    if [[ -f "${LOG_FILE}" ]] && rg -n --fixed-strings "Log Writer: ${DOC_DELEGATE_MAP[${AGENT}]}" "${LOG_FILE}" >/dev/null 2>&1; then
-      if rg -n --fixed-strings "Source Agent: ${AGENT}" "${LOG_FILE}" >/dev/null 2>&1; then
+    if [[ -f "${LOG_FILE}" ]] && contains_literal "Log Writer: ${DOC_DELEGATE_MAP[${AGENT}]}" "${LOG_FILE}"; then
+      if contains_literal "Source Agent: ${AGENT}" "${LOG_FILE}"; then
         HAS_DELEGATE_MARK=1
       fi
     fi
@@ -154,7 +170,7 @@ for AGENT in "${AGENTS[@]}"; do
 done
 
 for AGENT in "${AGENTS[@]}"; do
-  if ! rg -n --fixed-strings "| ${AGENT} |" "${THREAD_REGISTRY}" >/dev/null 2>&1; then
+  if ! contains_literal "| ${AGENT} |" "${THREAD_REGISTRY}"; then
     echo "INVALID: ${THREAD_REGISTRY} missing row for ${AGENT}"
     FAILED=1
   fi
@@ -230,7 +246,7 @@ for AGENT in "${AGENTS[@]}"; do
 done
 
 for AGENT in "${AGENTS[@]}"; do
-  if ! rg -n --fixed-strings "| ${AGENT} |" "${WORKTREE_REGISTRY}" >/dev/null 2>&1; then
+  if ! contains_literal "| ${AGENT} |" "${WORKTREE_REGISTRY}"; then
     echo "INVALID: ${WORKTREE_REGISTRY} missing row for ${AGENT}"
     FAILED=1
     continue

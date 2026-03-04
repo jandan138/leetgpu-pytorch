@@ -35,11 +35,14 @@ When user intent is to "use agent team", follow `agent_team/README.md` and execu
 ## Agent Team Run Lifecycle
 
 1. Enable Codex multi-agent capability once:
-   - `codex features enable multi_agent`
+   - Linux/macOS: `codex features enable multi_agent`
+   - Windows PowerShell: `codex.cmd features enable multi_agent`
 2. Run preflight checks:
-   - `bash agent_team/scripts/codex_multi_agent_preflight.sh`
+   - Linux/macOS: `bash agent_team/scripts/codex_multi_agent_preflight.sh`
+   - Windows PowerShell: `powershell -ExecutionPolicy Bypass -File agent_team/scripts/codex_multi_agent_preflight.ps1`
 3. Initialize a run:
-   - `bash agent_team/scripts/init_run.sh <run_id>`
+   - Linux/macOS: `bash agent_team/scripts/init_run.sh <run_id>`
+   - Windows PowerShell: `powershell -ExecutionPolicy Bypass -File agent_team/scripts/init_run.ps1 -RunId <run_id>`
 4. Prepare/edit isolated worktrees for editable roles:
    - `bash agent_team/scripts/setup_run_worktrees.sh <run_id> [base_ref]`
 5. Delegate work with:
@@ -49,9 +52,21 @@ When user intent is to "use agent team", follow `agent_team/README.md` and execu
    - maintain `runs/<run_id>/threads/registry.md`
    - maintain `runs/<run_id>/worktrees/registry.md`
 7. Validate run integrity:
-   - `bash agent_team/scripts/check_run_logs.sh <run_id>`
+   - Linux/macOS: `bash agent_team/scripts/check_run_logs.sh <run_id>`
+   - Windows PowerShell: `powershell -ExecutionPolicy Bypass -File agent_team/scripts/check_run_logs.ps1 -RunId <run_id>`
 8. Merge run memory deltas into long-term memory:
    - `bash agent_team/scripts/update_agent_memory.sh <run_id>`
+
+## Cross-Platform Notes (Windows/Linux)
+
+- Linux/macOS should use the `*.sh` scripts under `agent_team/scripts/`.
+- Native Windows should prefer `*.ps1` scripts when provided.
+- Current PowerShell-native coverage:
+  - `agent_team/scripts/codex_multi_agent_preflight.ps1`
+  - `agent_team/scripts/init_run.ps1`
+  - `agent_team/scripts/check_run_logs.ps1`
+- For scripts that are still Bash-only, use Git Bash or WSL on Windows until PowerShell parity is added.
+- On Windows, prefer `codex.cmd` over `codex` in PowerShell sessions to avoid execution-policy issues with `codex.ps1`.
 
 ## Governance Rules (Agent Team)
 
